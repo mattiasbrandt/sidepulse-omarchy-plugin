@@ -34,8 +34,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: No symlinks
-        # omarchy-plugin-validate rejects them too, but only once a manifest
-        # exists; this holds from the first commit.
+        # omarchy-plugin-validate rejects them too; this step names the paths.
         run: |
           links=$(git ls-files -s | awk '$1 == "120000" { print $4 }')
           if [ -n "$links" ]; then
@@ -48,10 +47,6 @@ jobs:
         env:
           VALIDATOR_SHA256: f7507e5042eb970e3dc918bdf6bf251c7557443892a77e71a17d7019ddde72c8
         run: |
-          if [ ! -f manifest.json ]; then
-            echo "::notice::No manifest.json yet; the scaffold (#3) adds it and removes this guard."
-            exit 0
-          fi
           validator="$RUNNER_TEMP/omarchy-plugin-validate"
           curl -fsSL -o "$validator" \
             "https://raw.githubusercontent.com/$OMARCHY_REPO/$OMARCHY_SHA/bin/omarchy-plugin-validate"
@@ -76,8 +71,16 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Unit tests
-        run: python -I -m unittest discover -s spikes -p 'test_*.py' -v
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+
+      - name: Tests
+        # The dev environment is uv.lock's `dev` group (pytest, wasmtime and
+        # upstream sidepulse at the pinned commit); it never touches the
+        # user's SidePulse venv. uv uses the interpreter set up above.
+        env:
+          PYTHON_VERSION: ${{ matrix.python }}
+        run: uv run --locked --python "$PYTHON_VERSION" pytest spikes -v
 
   qmllint:
     name: qmllint

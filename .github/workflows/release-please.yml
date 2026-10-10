@@ -5,11 +5,11 @@ name: Release Please
 # generated CHANGELOG.md section and the bumped manifest.json `version`.
 # Merging that PR tags vX.Y.Z and publishes the GitHub Release.
 #
-# It uses GITHUB_TOKEN, so the release PR does not trigger CI (GitHub does not
-# start workflows from GITHUB_TOKEN events). The release PR only touches
-# CHANGELOG.md, manifest.json's version and the release manifest. No check is
-# required on main today; if one becomes required, release-please needs a PAT
-# or GitHub App token here instead.
+# It uses GITHUB_TOKEN. CI and the PR-title check do run on the release PR, but
+# GitHub holds them as "awaiting approval" because the bot opened it (seen on
+# #18): a maintainer clicks "Approve and run" before merging, so the validator
+# checks the bumped manifest.json. The release PR only touches CHANGELOG.md,
+# manifest.json's version and the release manifest.
 #
 # Needs the repo setting "Allow GitHub Actions to create and approve pull
 # requests" (Settings > Actions > General).

@@ -1,5 +1,9 @@
 # SidePulse for Omarchy
 
+[![CI](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mattiasbrandt/sidepulse-omarchy-plugin)](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/mattiasbrandt/sidepulse-omarchy-plugin)](LICENSE)
+
 An Omarchy bar widget for SidePulse devices and AI coding agents: it shows
 agent status in the bar and drives SidePulse devices, the way the macOS
 SidePulse menu-bar app does.

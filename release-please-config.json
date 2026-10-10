@@ -19,6 +19,7 @@
   "packages": {
     ".": {
       "package-name": "sidepulse-omarchy-plugin",
+      "initial-version": "0.1.0",
       "extra-files": [
         { "type": "json", "path": "manifest.json", "jsonpath": "$.version" }
       ]

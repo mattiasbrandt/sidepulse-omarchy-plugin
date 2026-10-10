@@ -130,31 +130,42 @@ _Filled in during grilling, one entry per answered question._
   `root.QsWindow.window.contentItem` (high `z`, anchored to the bottom edge)
   draws across the full bar width on every monitor (3440, 2560, 1920 px
   windows; screenshot-checked). No companion `panel` kind is needed.
-- **D8 Session click:** focus the live terminal window if the agent process
-  still runs, else open the user's default terminal via `xdg-terminal-exec`
-  in the session cwd running upstream's resume command. No per-provider
+- **D8 Session click:** focus the terminal window of the process that
+  provably runs the session; resume (user's default terminal via
+  `xdg-terminal-exec`, in the session cwd, upstream's resume command) only
+  when no process can own it; otherwise explain where it may be running. No per-provider
   "Open with..." chooser / VS Code opener in v1.
-  *Spike #2 (session → process → window), `spikes/session_lookup.py`:*
-  - Upstream hook lines carry no pid. Exact sources exist per provider:
-    Claude writes `~/.claude/sessions/<pid>.json` (`sessionId`, `procStart`
-    = `/proc/<pid>/stat` starttime, a pid-reuse guard; honours
-    `CLAUDE_CONFIG_DIR`); Grok writes `~/.grok/active_sessions.json`
-    (`session_id`, `pid`). Codex/Cursor/Junie: no pid source found; fall back
-    to a unique live process of that binary with the session cwd (untested —
-    none running).
+  *Spike #2 (session → process → window), `spikes/session_lookup.py`,
+  tests `spikes/test_session_lookup.py`:*
+  - Every lookup ends in one of three states. **stopped**: no process can own
+    the session → resume. **live**: a process provably owns it → focus its
+    window, or say where it runs. **unresolved**: a process might own it but
+    nothing proves it → show the candidates; never resume (could duplicate a
+    live session) and never focus (could be the wrong session).
+  - Proof, strongest first. Claude writes `~/.claude/sessions/<pid>.json`
+    (`sessionId`, `procStart` = `/proc/<pid>/stat` starttime, a pid-reuse
+    guard; honours `CLAUDE_CONFIG_DIR`). Grok writes
+    `~/.grok/active_sessions.json` (`session_id`, `pid`). Any provider: the
+    session id as a whole command-line argument (`codex resume <id>`,
+    `junie --session-id=<id>`). Upstream hook lines carry no pid.
+  - Without proof, a process of the provider's binary in the session cwd makes
+    the session **unresolved**; none makes it **stopped**. Only processes
+    holding a terminal count: `codex app-server` daemons (ten live here, most
+    in other cwds) have none. A plain `codex` with no session argument (live
+    here in protoR2) therefore leaves every Codex session in that cwd
+    unresolved until one is proven. That's correct, but it means clicking an
+    unproven Codex/Cursor/Junie session in a busy cwd explains instead of acting.
   - Window: walk ancestors to a pid owning Hyprland clients. **Ghostty is
-    single-instance: all its windows share one pid**, so `pid:` selection is
-    ambiguous. Narrow by title — Claude titles its window with the
-    transcript's `ai-title` (verified: picked the right one of two Ghostty
-    windows). Focus by address.
+    single-instance: all its windows share one pid**, so narrow by title —
+    Claude titles its window with the transcript's `ai-title` (verified:
+    picked the right one of two Ghostty windows). Focus by address.
   - Hyprland 0.56 is Lua: `hyprctl dispatch 'hl.dsp.focus({ window =
     "address:0x…" })'`. A bad address still exits 0 and prints
     `hl.focus: window not found` — parse the output. Focusing a window on
     another workspace not yet tested (live check in #4).
-  - **New case — live but no window** (agent inside herdr/tmux, both live
-    examples here): resuming would duplicate a running session, so show
-    "running in <ancestor> (pid)" instead of resuming. Ambiguous title match:
-    same message, no guess.
+  - **Live but no window** (agent inside herdr/tmux — both live Claude and
+    Grok sessions here): show "running in <ancestor> (pid)"; ambiguous title
+    match: same message, no guess.
 - **D9 LED on/off:** per-device. Off = set that device's `led_display` to
   `custom` in upstream settings.json (service skips it; re-read each 1 s)
   and write `off`; On = set back to `agent`. Persists; uses upstream's own

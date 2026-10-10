@@ -12,12 +12,10 @@ empty; the features land slice by slice, tracked in the
 
 ```sh
 omarchy plugin add https://github.com/mattiasbrandt/sidepulse-omarchy-plugin
-omarchy plugin enable io.github.mattiasbrandt.sidepulse --section right
 ```
 
-Plugins install disabled, so the first command only clones the plugin; the
-second places it in the bar. The SidePulse prerequisites that the helper needs
-land with the helper in #10.
+It asks whether to enable the widget and which bar section to put it in. The
+SidePulse prerequisites that the helper needs land with the helper in #10.
 
 ## Usage
 

@@ -74,8 +74,16 @@ _Filled in during grilling, one entry per answered question._
   - QML displays and controls only; it never reimplements aggregation, the
     LED interpreter, or the keep-awake rules.
   - All upstream access goes through one swappable adapter: today
-    `sidepulse agent-monitor status --json` / `doctor --json` and the CLI;
-    later the Rust versioned socket protocol (PR #52).
+    `latest.json` + upstream's reader and rules, `doctor --json` and the
+    CLI; later the Rust versioned socket protocol (PR #52).
+  - *Spike #2 (state source):* reading `latest.json` with upstream's own
+    `agent_status_from_dict` + `snapshot_from_statuses` gives the identical
+    aggregate, counts and session ids as `agent-monitor status --json`, in
+    0.4 ms vs ~120 ms (which rescans a 2.4 MB `claude.jsonl` and grows with
+    it). The service writes `latest.json` (tmp + rename) within the same second
+    as the hook line. Watch the **directory** for `MOVED_TO latest.json`, and
+    re-run the rules on a timer so ages and staleness advance between writes.
+    Probe: `spikes/state_reader.py`.
   - Linux gaps (battery reader, keep-awake/lid, Notch frames) live in a small
     Python helper in the plugin repo that imports upstream's own code from
     the SidePulse venv (aggregate rules, settings load/save, keep-awake
@@ -84,24 +92,80 @@ _Filled in during grilling, one entry per answered question._
   reads NDJSON from its stdout. No extra unit or install step. Shell restart
   restarts the helper and releases any keep-awake inhibitor (safe failure).
   Engineering rule (not a user decision): exactly one helper per shell even
-  with one widget copy per monitor — owned by a single designated copy.
+  with one widget copy per monitor.
+  *Spike #2 (single helper), measured live on 3 monitors:* a plugin-local
+  `pragma Singleton` (declared in a `qmldir`, imported with `import "."`) is
+  shared by every widget copy and owns one `Process`. Consequences:
+  - The singleton **survives plugin hot-reload and plugin disable** (lives as
+    long as the shell). Its child process outlived `omarchy plugin disable`.
+    So the singleton refcounts widget copies and stops the helper when the
+    count stays at 0 (debounced — a reload drops it to 0 and back within
+    milliseconds), and restarts it when a copy registers again.
+  - Edits to the singleton's own QML do **not** hot-reload (old code kept
+    running until `omarchy restart shell`). Keep the singleton a thin process
+    owner and line dispatcher; logic lives in the helper and in ordinary
+    components. Note in AGENTS.md's live-check step.
+  - `bar` is still null in a widget's `Component.onCompleted` (injected after).
 - **D6 Notch engine:** the helper runs upstream's `sdled.wasm` via the
   `wasmtime` Python package (49.0.0, `py3-none-manylinux1_x86_64` wheel,
-  verified downloadable for the venv's Python 3.14). README requirement:
+  verified downloadable for the venv's Python 3.14).
+  *Spike #2 (wasm parity):* `spikes/wasm/sdled_wasmtime.py` (a line-for-line
+  port of upstream `led_wasm.py`'s call sequence) and an independent Deno
+  driver give byte-identical frames in 117/117 cases (off, all agent modes,
+  26 built-in animations, battery programs, 8 invalid programs; 2 and 8
+  LEDs; t = 0…2500 ms), and match upstream's own test vectors
+  (`tests/test_sidepulse.py`). Both drive the same wasm, so this proves the
+  port, not engine-vs-device; upstream's vectors are the engine reference.
+  Cost 0.017 ms/frame (60 fps budget 16.7 ms), 4 ms to instantiate. Re-run:
+  `spikes/wasm/compare.py`. README requirement:
   `~/.local/share/sidepulse/venv/bin/pip install wasmtime`. Survives
   `sidepulse update` (it force-reinstalls only the sidepulse wheel set).
   If wasmtime is missing, the helper reports a capability error and the
   Notch feature is unavailable; it does not silently fall back.
 - **D7 Notch placement:** thin 8-LED band drawn at the bar's inner edge
   (bottom edge for a top bar), centered, on every monitor; never overlaps
-  windows. Feasibility of drawing a full-width band from a bar-widget slot is
-  **unverified** — first spike in the plan (fallback: a companion `panel`
-  kind anchored to the bar edge).
-- **D8 Session click:** focus the live terminal window if the agent process
-  still runs (walk the process's parents to a Hyprland client pid, then
-  `hyprctl dispatch focuswindow pid:<pid>`), else open the user's default
-  terminal via `xdg-terminal-exec` in the session cwd running upstream's resume
-  command. No per-provider "Open with..." chooser / VS Code opener in v1.
+  windows.
+  *Spike #2 (verified live):* the bar is one layer-shell `PanelWindow` per
+  monitor with no clipping. A widget child reparented to
+  `root.QsWindow.window.contentItem` (high `z`, anchored to the bottom edge)
+  draws across the full bar width on every monitor (3440, 2560, 1920 px
+  windows; screenshot-checked). No companion `panel` kind is needed.
+- **D8 Session click:** focus the terminal window of the process that
+  provably runs the session; resume (user's default terminal via
+  `xdg-terminal-exec`, in the session cwd, upstream's resume command) only
+  when no process can own it; otherwise explain where it may be running. No per-provider
+  "Open with..." chooser / VS Code opener in v1.
+  *Spike #2 (session → process → window), `spikes/session_lookup.py`,
+  tests `spikes/test_session_lookup.py`:*
+  - Every lookup ends in one of three states. **stopped**: no process can own
+    the session → resume. **live**: a process provably owns it → focus its
+    window, or say where it runs. **unresolved**: a process might own it but
+    nothing proves it → show the candidates; never resume (could duplicate a
+    live session) and never focus (could be the wrong session).
+  - Proof, strongest first. Claude writes `~/.claude/sessions/<pid>.json`
+    (`sessionId`, `procStart` = `/proc/<pid>/stat` starttime, a pid-reuse
+    guard; honours `CLAUDE_CONFIG_DIR`). Grok writes
+    `~/.grok/active_sessions.json` (`session_id`, `pid`). Any provider: the
+    session id as a whole command-line argument (`codex resume <id>`,
+    `junie --session-id=<id>`). Upstream hook lines carry no pid.
+  - Without proof, a process of the provider's binary in the session cwd makes
+    the session **unresolved**; none makes it **stopped**. Only processes
+    holding a terminal count: `codex app-server` daemons (ten live here, most
+    in other cwds) have none. A plain `codex` with no session argument (live
+    here in protoR2) therefore leaves every Codex session in that cwd
+    unresolved until one is proven. That's correct, but it means clicking an
+    unproven Codex/Cursor/Junie session in a busy cwd explains instead of acting.
+  - Window: walk ancestors to a pid owning Hyprland clients. **Ghostty is
+    single-instance: all its windows share one pid**, so narrow by title —
+    Claude titles its window with the transcript's `ai-title` (verified:
+    picked the right one of two Ghostty windows). Focus by address.
+  - Hyprland 0.56 is Lua: `hyprctl dispatch 'hl.dsp.focus({ window =
+    "address:0x…" })'`. A bad address still exits 0 and prints
+    `hl.focus: window not found` — parse the output. Focusing a window on
+    another workspace not yet tested (live check in #4).
+  - **Live but no window** (agent inside herdr/tmux — both live Claude and
+    Grok sessions here): show "running in <ancestor> (pid)"; ambiguous title
+    match: same message, no guess.
 - **D9 LED on/off:** per-device. Off = set that device's `led_display` to
   `custom` in upstream settings.json (service skips it; re-read each 1 s)
   and write `off`; On = set back to `agent`. Persists; uses upstream's own
@@ -158,19 +222,22 @@ _Filled in during grilling, one entry per answered question._
 ```
 sidepulse-omarchy-plugin/                    (repo root = plugin root)
 ├── manifest.json        id io.github.mattiasbrandt.sidepulse, kinds [bar-widget]
+├── qmldir               declares the singleton below
+├── HelperProcess.qml    pragma Singleton: owns the one helper Process, refcounts
+│                        widget copies (stop at 0, debounced), parses NDJSON (D5)
 ├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup + IpcHandler
-├── Service.qml          owns the helper Process (singleton), parses NDJSON, exposes model
-├── Notch.qml            8-LED band renderer (frames from helper)
+├── Notch.qml            8-LED band, reparented into the bar window (D7)
 ├── *.qml / Model.js     popup sections: Sessions, Devices, KeepAwake, Settings, HookLog
 ├── helper/
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper
+├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
 ├── README.md  LICENSE (MIT)  preview.png  docs/spec.md
 ```
 
 ### Helper (`helper/sidepulse_omarchy.py`)
 
-- Launched by `Service.qml` as
+- Launched by the `HelperProcess` singleton as
   `~/.local/share/sidepulse/venv/bin/python -I <plugin>/helper/sidepulse_omarchy.py`
   (venv path overridable via widget setting `sidepulsePython`; default also
   tries `sidepulse`'s shebang interpreter).
@@ -183,13 +250,16 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `log` (recent hook decision rows), `error` (feature, message).
   Stdin commands: `set-device-enabled`, `set-brightness`, `set-display`,
   `set-policy`, `set-notch`, `set-agent-list`, `hooks-install`,
-  `hooks-uninstall`, `open-session`, `refresh`.
-- **Upstream reuse (D4):** state = watch `latest.json` (inotify) and run
+  `hooks-uninstall`, `open-session`, `refresh`. `open-session` answers with
+  the D8 lookup state (stopped → resumed, live → focused or located,
+  unresolved → explanation).
+- **Upstream reuse (D4):** state = watch the `latest.json` directory
+  (inotify `MOVED_TO latest.json`; the service writes tmp + rename) and run
   upstream's `snapshot_from_statuses` on it with
   `settings.idle_timeout_seconds` and retention, the same rules the Mac
   status bar applies, re-evaluated on a timer so ages and staleness advance.
-  Not polling `status --json`: it rescans the provider JSONL logs, and
-  `claude.jsonl` was already 2.2 MB after one evening (confirmed in spike 0).
+  Not polling `status --json`: it rescans the provider JSONL logs (measured
+  in #2: 0.4 ms for `latest.json` vs ~120 ms, growing with the logs).
   Never binds `events.sock` (it would stop the service driving LEDs); settings via `load_settings`/`save_settings`/`with_*`;
   devices via `discover_devices`; LED writes via `write_led_program`; keep-
   awake predicate via `KeepAwakeController.should_hold_for_mode`; battery
@@ -255,25 +325,20 @@ Thin vertical slices; each ends with validate + qmllint + pytest green and a
 live check in the shell. One GitHub issue per slice (D16), all sub-issues of
 #1 with native blocked-by edges.
 
-0. **Spikes** (#2) (answer before building on them)
-   - Can a bar-widget draw a full-width band at the bar edge? (D7; fallback:
-     companion `panel` kind.)
-   - Single helper across per-monitor widget copies (D5): owner election.
-   - `sdled.wasm` under wasmtime produces the same frames as upstream's
-     JavaScriptCore path for the built-in programs.
-   - **Session → process (D8):** upstream hook lines carry no pid (keys
-     verified: `session_id`, `cwd`, `transcript_path`, origin strings only;
-     `hook.py` walks the process tree at hook time but doesn't record the pid).
-     Find the live agent by a `/proc` scan (cmdline contains the session id, or
-     cwd match + open `transcript_path` fd). If no unique match: resume-new.
-   - **State source (D4):** confirm `latest.json` + `snapshot_from_statuses`
-     tracks the live state as fast as `status --json` at a fraction of the cost.
-1. **Scaffold** (#3) — repo, manifest, MIT LICENSE, README skeleton, static icon
+0. **Spikes** (#2) — answered; results are the *Spike #2* notes under D4–D8.
+   - Band: widget child reparented into the bar window, full width (D7).
+   - Single helper: plugin QML singleton, refcounted; survives reload/disable (D5).
+   - wasm: wasmtime port byte-identical to an independent driver, 117/117 (D6).
+   - Session → window: stopped / live / unresolved lookup (D8).
+   - State source: `latest.json` + upstream rules, 0.4 ms vs ~120 ms (D4).
+1. **Scaffold** (#3) — repo, manifest, MIT LICENSE, README skeleton, dev test
+   environment and runner (record the command in AGENTS.md), static icon
    in the bar; `omarchy plugin validate` passes; installs via
    `omarchy plugin add <local path>`.
 2. **Helper core + live icon** (#10) — capability probe, `hello`/`state` events,
-   Service.qml singleton, icon colour + tooltip follow real agents.
-3. **Sessions popup + open** (#4) — list, keyboard nav, focus-or-resume (D8).
+   `HelperProcess` singleton (refcounted), icon colour + tooltip follow real
+   agents.
+3. **Sessions popup + open** (#4) — list, keyboard nav, three-state open (D8).
 4. **Devices** (#5) — discovery, on/off via Manual mode, brightness, display mode.
 5. **Settings section** (#6) — hooks toggles, timeouts/retention, hook log
    viewer, capability problems.

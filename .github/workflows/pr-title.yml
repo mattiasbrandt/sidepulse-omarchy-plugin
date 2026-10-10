@@ -41,7 +41,7 @@ jobs:
           scopes: |
             widget
             helper
-            notch
+            bar-leds
             spec
             ci
             deps

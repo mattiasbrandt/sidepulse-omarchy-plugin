@@ -4,6 +4,9 @@ Omarchy shell plugin (`io.github.mattiasbrandt.sidepulse`) that gives SidePulse
 devices the macOS menu-bar app's functionality on Omarchy: a QML bar widget and
 popup, plus a Python helper that runs inside the user's SidePulse install.
 
+Write names exactly as `GLOSSARY.md` defines them: "SidePulse", "SidePulse
+Dot", "SidePulse Pro", "Bar LEDs"; lowercase `sidepulse` only in identifiers.
+
 ## Source of truth
 
 - **`docs/spec.md`** holds the decisions (D1–D16), the spec, the plan, and the
@@ -29,7 +32,9 @@ These hold in every change. Each traces to a decision in `docs/spec.md`.
 - **Settings through upstream (D9, D13).** SidePulse settings are written with
   upstream `load_settings`/`save_settings`, so unknown-key handling and the
   schema stay upstream's. Only presentation settings live in the shell.json
-  widget entry.
+  widget entry, plus one deliberate exception: each device's chosen display
+  (Agent / Battery / Off), which upstream can't express on Linux; the helper
+  re-derives upstream's value from it (D9).
 - **The service keeps the LEDs.** `sidepulse.service` drives agent LEDs. The
   helper takes a device over only by setting it to Manual (`custom`) and
   hands it back by restoring the mode. The service stops writing LEDs whenever

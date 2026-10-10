@@ -67,6 +67,9 @@ to `main`. It keeps one release PR open with the next version, the generated
 PR tags `vX.Y.Z` and publishes the GitHub Release. Nobody tags or edits
 `CHANGELOG.md` by hand.
 
+GitHub holds the release PR's CI as "awaiting approval" because the Actions bot
+opened it: click **Approve and run** and merge once it's green.
+
 Omarchy installs plugins as a git checkout of the default branch
 (`omarchy plugin add` / `update`), so a release is a named, documented point on
 `main`, not a separate artifact.

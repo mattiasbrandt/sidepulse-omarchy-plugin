@@ -95,6 +95,8 @@ verification ticket's laptop checklist (#9).
 `CONTRIBUTING.md` owns the commit rules, type → version table and scopes.
 
 - Branch per issue with `gh issue develop <n> --name <branch> --checkout`.
+  Work not tied to one slice (plan, docs) takes a plain branch: a branch
+  linked to the parent #1 closes it when its PR merges.
 - **The PR title is the release record.** `main` takes squash merges only; the
   title becomes the single commit release-please reads. Write it as a
   Conventional Commit typed by what the change means for a user (`feat`,

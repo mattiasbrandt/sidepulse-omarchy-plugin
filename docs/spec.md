@@ -1,6 +1,6 @@
 # SidePulse Omarchy plugin — Spec & Plan
 
-Status: **spec agreed 2026-10-10** (decisions D1–D16 below). Implementation not started.
+Status: **spec agreed 2026-10-10, plan review 2026-10-11** (decisions D1–D24 below). Implementation not started.
 
 ## Goal
 
@@ -43,7 +43,7 @@ plugin. Developed on a desktop (`protoarchy`, Dot) and a laptop.
 | Settings: animations per state | — | Out (hand-edit JSON) — D2 |
 | Hook decision log export (CSV/HTML) | In-popup log viewer | In, viewer not export — D2 |
 | Show battery 7s on plug/unplug | Helper | In — D10 |
-| SidePulse Notch virtual LED overlay | Band at bar edge | In — D6, D7 |
+| SidePulse Notch virtual LED overlay | Bar LEDs along the bar edge | In — D6, D7, D21 |
 | Keep awake with lid closed | systemd-inhibit sleep + lid | In — D11 |
 | Eject prevention | — | Out (Dot doesn't need it; Pro on Linux unverified) |
 | Setup window / run at login | Upstream systemd unit + plugin enable | Out (covered) |
@@ -59,7 +59,7 @@ _Filled in during grilling, one entry per answered question._
 - **D2 Scope:** in addition to the core (bar icon, session list, click to
   open, LED on/off, brightness, hook toggles), v1 includes:
   - keep-awake while agents work (Never / When Agents Work / Always);
-  - Notch-style on-screen virtual LEDs;
+  - Bar LEDs, the Omarchy counterpart of SidePulse Notch;
   - in-popup hook decision log viewer;
   - **laptop features** — battery LED display mode, show battery on
     plug/unplug, lid-closed behaviour — even though `protoarchy` has no
@@ -67,7 +67,7 @@ _Filled in during grilling, one entry per answered question._
   - Not selected: per-state animation editor (settings JSON by hand for now).
 - **D3 Distribution:** own public GitHub repo first, installed into
   `~/.config/omarchy/plugins/<id>/` (laptop installs it like any other user);
-  offer it upstream to inteliwear/sidepulse once stable. Consequence: no
+  offer it upstream to `inteliwear/sidepulse` once stable. Consequence: no
   machine-specific paths or assumptions; README + license + install step.
   Plugin id: `io.github.mattiasbrandt.sidepulse`.
 - **D4 Architecture: thin UI, upstream does logic.**
@@ -84,7 +84,7 @@ _Filled in during grilling, one entry per answered question._
     as the hook line. Watch the **directory** for `MOVED_TO latest.json`, and
     re-run the rules on a timer so ages and staleness advance between writes.
     Probe: `spikes/state_reader.py`.
-  - Linux gaps (battery reader, keep-awake/lid, Notch frames) live in a small
+  - Linux gaps (battery reader, keep-awake/lid, Bar LED frames) live in a small
     Python helper in the plugin repo that imports upstream's own code from
     the SidePulse venv (aggregate rules, settings load/save, keep-awake
     predicate, `sdled.wasm`). Each gap is shaped as a future upstream PR.
@@ -106,7 +106,7 @@ _Filled in during grilling, one entry per answered question._
     owner and line dispatcher; logic lives in the helper and in ordinary
     components. Note in AGENTS.md's live-check step.
   - `bar` is still null in a widget's `Component.onCompleted` (injected after).
-- **D6 Notch engine:** the helper runs upstream's `sdled.wasm` via the
+- **D6 Bar LEDs engine:** the helper runs upstream's `sdled.wasm` via the
   `wasmtime` Python package (49.0.0, `py3-none-manylinux1_x86_64` wheel,
   verified downloadable for the venv's Python 3.14).
   *Spike #2 (wasm parity):* `spikes/wasm/sdled_wasmtime.py` (a line-for-line
@@ -119,10 +119,10 @@ _Filled in during grilling, one entry per answered question._
   Cost 0.017 ms/frame (60 fps budget 16.7 ms), 4 ms to instantiate. Re-run:
   `spikes/wasm/compare.py`. README requirement:
   `~/.local/share/sidepulse/venv/bin/pip install wasmtime`. Survives
-  `sidepulse update` (it force-reinstalls only the sidepulse wheel set).
+  `sidepulse update` (it force-reinstalls only the `sidepulse` wheel set).
   If wasmtime is missing, the helper reports a capability error and the
-  Notch feature is unavailable; it does not silently fall back.
-- **D7 Notch placement:** thin 8-LED band drawn at the bar's inner edge
+  Bar LEDs are unavailable; they do not silently fall back.
+- **D7 Bar LEDs placement:** thin row of LEDs drawn at the bar's inner edge
   (bottom edge for a top bar), centered, on every monitor; never overlaps
   windows.
   *Spike #2 (verified live):* the bar is one layer-shell `PanelWindow` per
@@ -164,13 +164,29 @@ _Filled in during grilling, one entry per answered question._
     `hl.focus: window not found` — parse the output. Focusing a window on
     another workspace not yet tested (live check in #4).
   - **Live but no window** (agent inside herdr/tmux — both live Claude and
-    Grok sessions here): show "running in <ancestor> (pid)"; ambiguous title
-    match: same message, no guess.
+    Grok sessions here): *amended in the plan review* — jump into the
+    multiplexer. A small adapter per multiplexer finds the pane holding the
+    process, focuses it, then focuses the window running a client of that
+    multiplexer, or opens a terminal attached to it when none runs. v1:
+    **herdr** (verified read-only: `herdr pane process-info --pane <id>` lists
+    the pane's foreground pids; `herdr agent focus <pane>`; the attached client
+    runs in a Ghostty window) and **tmux** (`list-panes -a -F '#{pane_pid} …'`,
+    `select-window`/`select-pane`, `switch-client`; not exercised live). Any
+    other ancestor, or an ambiguous title match: show "running in <ancestor>
+    (pid)", no guess.
 - **D9 LED on/off:** per-device. Off = set that device's `led_display` to
   `custom` in upstream settings.json (service skips it; re-read each 1 s)
   and write `off`; On = set back to `agent`. Persists; uses upstream's own
   mechanism. Written through upstream `load_settings`/`save_settings` in the
   helper (never hand-edited JSON, which would drop or corrupt keys).
+  *Amended in the plan review:* on Linux upstream can store only Agent or
+  Manual for a device, but users choose between **Agent, Battery and Off**
+  (Battery is helper-driven, D10). So the **plugin remembers each device's
+  chosen display** in its widget settings (keyed by device id), and the
+  helper re-derives upstream's value from it (Agent → `agent`; Battery, Off →
+  `custom`) at start and after every takeover. That also repairs a device
+  left Manual by a crash mid-takeover. This one per-device value is the
+  deliberate exception to "settings through upstream".
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -192,7 +208,7 @@ _Filled in during grilling, one entry per answered question._
   active count, top session.
 - **D13 Settings UI:** all inside the one popup — Sessions (top), Devices
   (per-device on/off, display mode, brightness), Keep awake (policy), and a
-  collapsible Settings section (hooks per provider, Notch on/off, idle
+  collapsible Settings section (hooks per provider, Bar LEDs on/off, idle
   timeout, session retention, hook log viewer). Keyboard navigable.
   Engineering rule: SidePulse behaviour settings are stored in upstream's
   settings.json (`virtual_status_device_enabled`, `sleep_prevention_policy`,
@@ -224,6 +240,33 @@ _Filled in during grilling, one entry per answered question._
   the Omarchy shell in an Arch container, actionlint; SHA-pinned actions moved
   by Dependabot. Reused from protoR2: the type → version table, SHA pins with
   Dependabot, the checksum-verified actionlint step. Rules: `CONTRIBUTING.md`.
+- **D18 Popup frame first (plan review):** #10 ships the popup itself, empty,
+  keyboard-navigable, with its section layout; #4–#7 each fill one section and
+  stay independent of each other.
+- **D19 Setup state (plan review):** the icon stays visible with a distinct
+  "needs setup" look; the popup's top section lists what's missing, in order:
+  SidePulse not installed (show the install command), service stopped ("start
+  service" runs `sidepulse service start`), no device ("plug in a SidePulse").
+  Agent State keeps working without a device.
+- **D20 Ask notification (plan review):** opt-in setting "Notify when a
+  session asks", off by default; clicking the notification jumps to the
+  session (D8). Beyond Mac parity: the Mac app sends no agent notifications.
+- **D21 The look follows the product (plan review):** popup device rows draw
+  a SidePulse Dot (2 LEDs) or SidePulse Pro (8 LEDs) lit live; the Bar LEDs
+  match the connected product (2 or 8; 8 with none or both, since upstream
+  prefers the Pro); the bar icon is a Dot or Pro glyph, neutral when none is
+  connected.
+- **D22 Own artwork (plan review):** product drawings are our own vector
+  shapes in QML, themed, with live LED colours. No SidePulse brand assets.
+- **D23 SidePulse Pro supported, untested (plan review):** the Pro runs through
+  upstream's device code like the Dot. README marks it untested on hardware;
+  the verification ticket asks for a Pro tester. A Pro that unmounts on
+  suspend shows "not connected" until it remounts; no eject prevention.
+- **D24 Names follow upstream (plan review):** "SidePulse", "SidePulse Dot",
+  "SidePulse Pro" in all prose and UI, including the manifest's display name;
+  lowercase `sidepulse` only inside identifiers. Our virtual LEDs are **Bar
+  LEDs**, the Omarchy counterpart of upstream's SidePulse Notch.
+  Vocabulary: [`GLOSSARY.md`](../GLOSSARY.md).
 
 ## Spec
 
@@ -236,7 +279,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 ├── HelperProcess.qml    pragma Singleton: owns the one helper Process, refcounts
 │                        widget copies (stop at 0, debounced), parses NDJSON (D5)
 ├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup + IpcHandler
-├── Notch.qml            8-LED band, reparented into the bar window (D7)
+├── BarLeds.qml          Bar LEDs, reparented into the bar window (D7, D21)
 ├── *.qml / Model.js     popup sections: Sessions, Devices, KeepAwake, Settings, HookLog
 ├── helper/
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
@@ -256,10 +299,10 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `state` (aggregate mode, four-state label, colour, active_count, sessions[]),
   `devices` (id, name, path, led_display, brightness, kind Dot/Pro, led count),
   `hooks` (doctor --json payload), `power` (battery %, plugged, lid),
-  `awake` (holding bool, reason), `frame` (8×RGB for the Notch band),
+  `awake` (holding bool, reason), `frame` (RGB per Bar LED),
   `log` (recent hook decision rows), `error` (feature, message).
   Stdin commands: `set-device-enabled`, `set-brightness`, `set-display`,
-  `set-policy`, `set-notch`, `set-agent-list`, `hooks-install`,
+  `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
   `hooks-uninstall`, `open-session`, `refresh`. `open-session` answers with
   the D8 lookup state (stopped → resumed, live → focused or located,
   unresolved → explanation).
@@ -273,7 +316,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   Never binds `events.sock` (it would stop the service driving LEDs); settings via `load_settings`/`save_settings`/`with_*`;
   devices via `discover_devices`; LED writes via `write_led_program`; keep-
   awake predicate via `KeepAwakeController.should_hold_for_mode`; battery
-  programs via `program_for_battery`; Notch frames via `sdled.wasm` + upstream
+  programs via `program_for_battery`; Bar LED frames via `sdled.wasm` + upstream
   blending constants. Hook install/uninstall via the `sidepulse agent-monitor`
   CLI.
 - **Linux-only additions (D10, D11):** `/sys/class/power_supply` reader that
@@ -292,17 +335,23 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 
 ### Widget behaviour
 
-- Icon (D12): always visible; colour by four-state label; Ask → `active`.
-  Tooltip: state, active count, top session.
-- Popup (D13), keyboard navigable (j/k, Enter, Esc):
+- Icon (D12, D21): always visible; a SidePulse Dot or Pro glyph for the
+  connected product (neutral with none); colour by State; Ask → `active`;
+  a distinct "needs setup" look while D19 applies. Tooltip: State, active
+  count, top session.
+- Popup (D13, D18), keyboard navigable (j/k, Enter, Esc):
+  0. **Setup** (only while something is missing, D19).
   1. **Sessions** — up to 10, upstream ordering; row = provider mark,
      project (cwd basename), state, last message, age. Enter/click = D8.
-  2. **Devices** — per device: on/off (D9), display agent/battery, brightness.
+  2. **Devices** — per device, drawn as its product with live LEDs (D21, D22):
+     display Agent / Battery / Off (D9), brightness.
   3. **Keep awake** — Never / When Agents Work / Always; shows holding state.
   4. **Settings** (collapsible) — hooks per provider (status from doctor,
-     toggle install/uninstall), Notch on/off, idle timeout, retention,
-     hook log viewer (last N decision rows), capability problems.
-- Notch band (D7) when `virtual_status_device_enabled`.
+     toggle install/uninstall), Bar LEDs on/off, idle timeout, retention,
+     hook log viewer (last N decision rows), "Notify when a session asks"
+     (D20), capability problems.
+- Bar LEDs (D7, D21) when `virtual_status_device_enabled` (upstream's SidePulse
+  Notch setting, so it means the same on both).
 - IPC: `omarchy-shell shell toggle io.github.mattiasbrandt.sidepulse` opens the
   popup; README suggests a keybind (the plugin installs none).
 - Exactly one helper per shell (D5); all widget copies render from the shared
@@ -317,7 +366,8 @@ upstream PRs for the Linux battery/lid code (D10); QML test harness.
 ### Requirements documented in README
 
 SidePulse installed via the official installer; `wasmtime` in the SidePulse
-venv for the Notch; `xdg-terminal-exec` (Omarchy default); `systemd-inhibit`
+venv for the Bar LEDs; `xdg-terminal-exec` (Omarchy default); optional `herdr` or
+`tmux` for jumping into sessions that run inside them (D8); `systemd-inhibit`
 (systemd); the upstream commit tested against.
 
 **Security section** (marketplace W8; plugins are unsandboxed): list exactly
@@ -357,7 +407,7 @@ First, **CI and release automation** (#14, D17), before any plugin code.
 6. **Keep awake** (#7) — policy, predicate, inhibitor lifecycle.
 7. **Laptop** (#11) — battery reader, battery display, 7 s on plug/unplug, lid
    animations, LED handover.
-8. **Notch band** (#8) — wasm frames → band rendering.
+8. **Bar LEDs** (#8) — wasm frames → Bar LEDs rendering.
 9. **Release prep** (#12) — README (install/usage/settings/requirements/remove/
    security), preview.png, push public, marketplace submission.
 10. **Verification ticket** (#9) — protoarchy live pass with the Dot; laptop
@@ -473,11 +523,11 @@ Paths relative to `src/sidepulse/`.
   --resume`, run in `cwd`; VS Code `vscode://anthropic.claude-code/open?session=<id>`.
   All terminal launch/focus code is AppleScript (macOS-only).
 - **macOS-only today:** battery reader (`ioreg`; verified failing here),
-  keep-awake (`caffeinate`) and lid (`pmset`, `ioreg`), Notch (`sdled.wasm`
+  keep-awake (`caffeinate`) and lid (`pmset`, `ioreg`), SidePulse Notch (`sdled.wasm`
   run in JavaScriptCore via PyObjC), power-source notifications, `sidepulse
   settings`. Linux equivalents: `/sys/class/power_supply`, `systemd-inhibit`,
   logind lid state.
-- **Notch engine:** `resources/sdled.wasm` (34 KB, no imports; exports
+- **SidePulse Notch engine (upstream):** `resources/sdled.wasm` (34 KB, no imports; exports
   `sdled_reset/parse/step`, RGB bytes at output ptr, 2 or 8 LEDs). QML has no
   WebAssembly; would need a node/deno/wasmtime helper streaming frames, or a
   JS port of the `virtual_led_colors` fallback.

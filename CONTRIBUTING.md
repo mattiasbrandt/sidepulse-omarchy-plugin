@@ -43,7 +43,7 @@ A **breaking change** is anything that makes an existing install stop working
 without the user acting: a new required prerequisite, a renamed or removed
 widget setting in `shell.json`, a dropped SidePulse or Omarchy version, a
 changed plugin id. Mark it with `!` after the type or scope:
-`feat(helper)!: require wasmtime for the notch band`.
+`feat(helper)!: require wasmtime for the bar LEDs`.
 
 ### Scopes
 
@@ -53,7 +53,7 @@ Optional, one of:
 |---|---|
 | `widget` | Bar widget and popup QML |
 | `helper` | The Python helper and its upstream adapter |
-| `notch` | The on-screen LED band |
+| `bar-leds` | The Bar LEDs along the Omarchy bar edge |
 | `spec` | `docs/spec.md` decisions and plan |
 | `ci` | Workflows and CI scripts |
 | `deps` | Dependency and pin updates (Dependabot uses it) |

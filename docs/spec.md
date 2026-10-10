@@ -399,7 +399,7 @@ First, **CI and release automation** (#14, D17), before any plugin code.
    `omarchy plugin add <local path>`.
 2. **Helper core + live icon** (#10) — capability probe, `hello`/`state` events,
    `HelperProcess` singleton (refcounted), icon colour + tooltip follow real
-   agents.
+   agents, the empty popup frame (D18) and the setup state (D19).
 3. **Sessions popup + open** (#4) — list, keyboard nav, three-state open (D8).
 4. **Devices** (#5) — discovery, on/off via Manual mode, brightness, display mode.
 5. **Settings section** (#6) — hooks toggles, timeouts/retention, hook log

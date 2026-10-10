@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.mattiasbrandt.sidepulse",
+  "name": "SidePulse",
+  "version": "0.0.0",
+  "author": "Mattias Brandt",
+  "license": "MIT",
+  "description": "SidePulse devices and AI coding agent status in the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "SidePulse",
+    "description": "Status of your AI coding agents and SidePulse devices, the way the macOS SidePulse app shows them.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "sidepulsePython": ""
+    },
+    "schema": [
+      {
+        "key": "sidepulsePython",
+        "type": "path",
+        "label": "SidePulse Python",
+        "description": "Python of the SidePulse install. Leave empty to use SidePulse's own venv.",
+        "defaultValue": ""
+      }
+    ]
+  }
+}

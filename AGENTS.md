@@ -64,12 +64,25 @@ Before calling a change done, run every check in the **Checks** table of
 fails on any qmllint warning, and resolves Omarchy's `qs.*` imports the way
 Quickshell does.
 
-Live check: sync the tree into the plugin dir (the shell hot-reloads on save),
-then exercise the change in the real bar:
+Live check: install the working tree into the **center** section of the bar
+(the local test placement; the manifest default for users stays `right`),
+exercise the change, then put the bar back exactly as it was:
 
 ```sh
-rsync -a --delete --exclude .git ./ ~/.config/omarchy/plugins/io.github.mattiasbrandt.sidepulse/
+cp ~/.config/omarchy/shell.json /tmp/shell.json.before-check
+rsync -a --delete --exclude .git --exclude .claude --exclude .pytest_cache \
+  ./ ~/.config/omarchy/plugins/io.github.mattiasbrandt.sidepulse/
+omarchy-shell shell rescanPlugins
+omarchy plugin enable io.github.mattiasbrandt.sidepulse --section center
+# ... check the change; the shell hot-reloads on every rsync ...
+omarchy plugin disable io.github.mattiasbrandt.sidepulse
+rm -rf ~/.config/omarchy/plugins/io.github.mattiasbrandt.sidepulse
+omarchy-shell shell rescanPlugins
+diff /tmp/shell.json.before-check ~/.config/omarchy/shell.json
 ```
+
+The center section also exercises the bar's zero-size anchor copy of a center
+widget, which the single-helper refcount (D5) has to count correctly.
 
 Hot reload skips the plugin's QML singleton (it lives as long as the shell),
 so a change to the singleton needs `omarchy restart shell` before the check.

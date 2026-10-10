@@ -394,7 +394,7 @@ First, **CI and release automation** (#14, D17), before any plugin code.
    - Session → window: stopped / live / unresolved lookup (D8).
    - State source: `latest.json` + upstream rules, 0.4 ms vs ~120 ms (D4).
 1. **Scaffold** (#3) — repo, manifest, MIT LICENSE, README skeleton, dev test
-   environment and runner (record the command in AGENTS.md), static icon
+   environment and runner (command in CONTRIBUTING.md's Checks table), static icon
    in the bar; `omarchy plugin validate` passes; installs via
    `omarchy plugin add <local path>`.
 2. **Helper core + live icon** (#10) — capability probe, `hello`/`state` events,

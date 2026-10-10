@@ -1,0 +1,22 @@
+[project]
+name = "sidepulse-omarchy-plugin-dev"
+version = "0.0.0"
+requires-python = ">=3.10"
+description = "Development environment for the plugin's Python tests. The plugin itself installs nothing; the helper runs in the user's SidePulse venv."
+
+# Dev-only: the tests need upstream's own code (the state rules and the
+# wasm engine) and pytest. Nothing here goes into ~/.local/share/sidepulse/venv.
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "wasmtime==49.0.0",
+    "sidepulse",
+]
+
+[tool.uv]
+package = false
+
+# The commit the spec's research (docs/spec.md, appendix) and the user's
+# SidePulse install were checked against.
+[tool.uv.sources]
+sidepulse = { git = "https://github.com/inteliwear/sidepulse.git", rev = "6d55225fed20a82521b23d86a4df2c4a15dff295" }

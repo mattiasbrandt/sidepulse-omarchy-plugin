@@ -17,34 +17,12 @@ Dot", "SidePulse Pro", "Bar LEDs"; lowercase `sidepulse` only in identifiers.
   edges. Work an issue only once its blockers are closed. Spike answers (#2)
   land in `docs/spec.md` as amendments to the decision they settle.
 
-## Invariants
+## Standards
 
-These hold in every change. Each traces to a decision in `docs/spec.md`.
-
-- **Upstream does the logic (D4).** The helper imports SidePulse's own code
-  (state rules, settings, devices, LED programs, keep-awake predicate,
-  `sdled.wasm`) from the user's SidePulse venv. QML renders and sends commands.
-  Code that would duplicate an upstream rule calls the upstream rule instead.
-- **One adapter (D4, D14).** Every upstream touchpoint goes through the helper's
-  adapter layer, so the Rust protocol (upstream PR #52) can replace it later.
-  Upstream capabilities are probed at start; a missing one disables only its
-  feature and surfaces the reason in the popup. Failures stay loud.
-- **Settings through upstream (D9, D13).** SidePulse settings are written with
-  upstream `load_settings`/`save_settings`, so unknown-key handling and the
-  schema stay upstream's. Only presentation settings live in the shell.json
-  widget entry, plus one deliberate exception: each device's chosen display
-  (Agent / Battery / Off), which upstream can't express on Linux; the helper
-  re-derives upstream's value from it (D9).
-- **The service keeps the LEDs.** `sidepulse.service` drives agent LEDs. The
-  helper takes a device over only by setting it to Manual (`custom`) and
-  hands it back by restoring the mode. The service stops writing LEDs whenever
-  something accepts on `events.sock`, so that socket belongs to upstream alone.
-- **One helper per shell (D5),** spawned by the widget, exiting when stdin
-  closes, releasing any inhibitor and LED takeover on exit.
-- **Omarchy installs plain files.** `omarchy plugin add` runs no plugin code,
-  hooks or sudo: every requirement is a documented prerequisite in the
-  README's Requirements section, and every file or system state the plugin
-  touches is listed in its Security section. No symlinks anywhere in the repo.
+Before writing helper or QML code, read `CODING_STANDARDS.md`: the
+architecture invariants every change keeps (upstream does the logic, one
+adapter, settings through upstream, the service keeps the LEDs, one helper per
+shell) and the naming rules. Reviews check diffs against it.
 
 ## Reference material
 

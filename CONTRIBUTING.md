@@ -81,6 +81,7 @@ CI (`.github/workflows/ci.yml`) runs on every PR and on `main`:
 | Check | Locally |
 |---|---|
 | Plugin validation (Omarchy's own validator at the pinned Omarchy tag) | `omarchy plugin validate .` |
+| SidePulse naming (D24) | `python3 -I scripts/check_names.py` |
 | Python tests | `UV_PROJECT_ENVIRONMENT="$HOME/.cache/sidepulse-omarchy-plugin/venv" uv run --locked pytest spikes` |
 | qmllint against the Omarchy shell | `scripts/qmllint.sh` |
 | actionlint | `actionlint` |

@@ -70,6 +70,9 @@ then exercise the change in the real bar:
 rsync -a --delete --exclude .git ./ ~/.config/omarchy/plugins/io.github.mattiasbrandt.sidepulse/
 ```
 
+Hot reload skips the plugin's QML singleton (it lives as long as the shell),
+so a change to the singleton needs `omarchy restart shell` before the check.
+
 Hardware a change needs but this machine lacks (battery, lid) goes on the
 verification ticket's laptop checklist (#9).
 

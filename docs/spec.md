@@ -74,8 +74,16 @@ _Filled in during grilling, one entry per answered question._
   - QML displays and controls only; it never reimplements aggregation, the
     LED interpreter, or the keep-awake rules.
   - All upstream access goes through one swappable adapter: today
-    `sidepulse agent-monitor status --json` / `doctor --json` and the CLI;
-    later the Rust versioned socket protocol (PR #52).
+    `latest.json` + upstream's reader and rules, `doctor --json` and the
+    CLI; later the Rust versioned socket protocol (PR #52).
+  - *Spike #2 (state source):* reading `latest.json` with upstream's own
+    `agent_status_from_dict` + `snapshot_from_statuses` gives the identical
+    aggregate, counts and session ids as `agent-monitor status --json`, in
+    0.4 ms vs ~120 ms (which rescans a 2.4 MB `claude.jsonl` and grows with
+    it). The service writes `latest.json` (tmp + rename) within the same second
+    as the hook line. Watch the **directory** for `MOVED_TO latest.json`, and
+    re-run the rules on a timer so ages and staleness advance between writes.
+    Probe: `spikes/state_reader.py`.
   - Linux gaps (battery reader, keep-awake/lid, Notch frames) live in a small
     Python helper in the plugin repo that imports upstream's own code from
     the SidePulse venv (aggregate rules, settings load/save, keep-awake
@@ -84,24 +92,69 @@ _Filled in during grilling, one entry per answered question._
   reads NDJSON from its stdout. No extra unit or install step. Shell restart
   restarts the helper and releases any keep-awake inhibitor (safe failure).
   Engineering rule (not a user decision): exactly one helper per shell even
-  with one widget copy per monitor — owned by a single designated copy.
+  with one widget copy per monitor.
+  *Spike #2 (single helper), measured live on 3 monitors:* a plugin-local
+  `pragma Singleton` (declared in a `qmldir`, imported with `import "."`) is
+  shared by every widget copy and owns one `Process`. Consequences:
+  - The singleton **survives plugin hot-reload and plugin disable** (lives as
+    long as the shell). Its child process outlived `omarchy plugin disable`.
+    So the singleton refcounts widget copies and stops the helper when the
+    count stays at 0 (debounced — a reload drops it to 0 and back within
+    milliseconds), and restarts it when a copy registers again.
+  - Edits to the singleton's own QML do **not** hot-reload (old code kept
+    running until `omarchy restart shell`). Keep the singleton a thin process
+    owner and line dispatcher; logic lives in the helper and in ordinary
+    components. Note in AGENTS.md's live-check step.
+  - `bar` is still null in a widget's `Component.onCompleted` (injected after).
 - **D6 Notch engine:** the helper runs upstream's `sdled.wasm` via the
   `wasmtime` Python package (49.0.0, `py3-none-manylinux1_x86_64` wheel,
-  verified downloadable for the venv's Python 3.14). README requirement:
+  verified downloadable for the venv's Python 3.14).
+  *Spike #2 (wasm parity):* `spikes/wasm/sdled_wasmtime.py` (a line-for-line
+  port of upstream `led_wasm.py`'s call sequence) and an independent Deno
+  driver give byte-identical frames in 117/117 cases (off, all agent modes,
+  26 built-in animations, battery programs, 8 invalid programs; 2 and 8
+  LEDs; t = 0…2500 ms), and match upstream's own test vectors
+  (`tests/test_sidepulse.py`). Both drive the same wasm, so this proves the
+  port, not engine-vs-device; upstream's vectors are the engine reference.
+  Cost 0.017 ms/frame (60 fps budget 16.7 ms), 4 ms to instantiate. Re-run:
+  `spikes/wasm/compare.py`. README requirement:
   `~/.local/share/sidepulse/venv/bin/pip install wasmtime`. Survives
   `sidepulse update` (it force-reinstalls only the sidepulse wheel set).
   If wasmtime is missing, the helper reports a capability error and the
   Notch feature is unavailable; it does not silently fall back.
 - **D7 Notch placement:** thin 8-LED band drawn at the bar's inner edge
   (bottom edge for a top bar), centered, on every monitor; never overlaps
-  windows. Feasibility of drawing a full-width band from a bar-widget slot is
-  **unverified** — first spike in the plan (fallback: a companion `panel`
-  kind anchored to the bar edge).
+  windows.
+  *Spike #2 (verified live):* the bar is one layer-shell `PanelWindow` per
+  monitor with no clipping. A widget child reparented to
+  `root.QsWindow.window.contentItem` (high `z`, anchored to the bottom edge)
+  draws across the full bar width on every monitor (3440, 2560, 1920 px
+  windows; screenshot-checked). No companion `panel` kind is needed.
 - **D8 Session click:** focus the live terminal window if the agent process
-  still runs (walk the process's parents to a Hyprland client pid, then
-  `hyprctl dispatch focuswindow pid:<pid>`), else open the user's default
-  terminal via `xdg-terminal-exec` in the session cwd running upstream's resume
-  command. No per-provider "Open with..." chooser / VS Code opener in v1.
+  still runs, else open the user's default terminal via `xdg-terminal-exec`
+  in the session cwd running upstream's resume command. No per-provider
+  "Open with..." chooser / VS Code opener in v1.
+  *Spike #2 (session → process → window), `spikes/session_lookup.py`:*
+  - Upstream hook lines carry no pid. Exact sources exist per provider:
+    Claude writes `~/.claude/sessions/<pid>.json` (`sessionId`, `procStart`
+    = `/proc/<pid>/stat` starttime, a pid-reuse guard; honours
+    `CLAUDE_CONFIG_DIR`); Grok writes `~/.grok/active_sessions.json`
+    (`session_id`, `pid`). Codex/Cursor/Junie: no pid source found; fall back
+    to a unique live process of that binary with the session cwd (untested —
+    none running).
+  - Window: walk ancestors to a pid owning Hyprland clients. **Ghostty is
+    single-instance: all its windows share one pid**, so `pid:` selection is
+    ambiguous. Narrow by title — Claude titles its window with the
+    transcript's `ai-title` (verified: picked the right one of two Ghostty
+    windows). Focus by address.
+  - Hyprland 0.56 is Lua: `hyprctl dispatch 'hl.dsp.focus({ window =
+    "address:0x…" })'`. A bad address still exits 0 and prints
+    `hl.focus: window not found` — parse the output. Focusing a window on
+    another workspace not yet tested (live check in #4).
+  - **New case — live but no window** (agent inside herdr/tmux, both live
+    examples here): resuming would duplicate a running session, so show
+    "running in <ancestor> (pid)" instead of resuming. Ambiguous title match:
+    same message, no guess.
 - **D9 LED on/off:** per-device. Off = set that device's `led_display` to
   `custom` in upstream settings.json (service skips it; re-read each 1 s)
   and write `off`; On = set back to `agent`. Persists; uses upstream's own

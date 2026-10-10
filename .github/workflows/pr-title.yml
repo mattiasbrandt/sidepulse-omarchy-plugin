@@ -1,0 +1,53 @@
+name: PR title
+
+# main only takes squash merges, and the squash commit is the PR title with an
+# empty body. That title is the Conventional Commit release-please reads, so it
+# is checked here; commits on the branch stay free-form. CONTRIBUTING.md has
+# the rules.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    name: conventional commit title
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Check the PR title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50  # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            test
+            docs
+            chore
+            ci
+            build
+            revert
+          scopes: |
+            widget
+            helper
+            notch
+            spec
+            ci
+            deps
+            release
+          requireScope: false
+          # Lowercase imperative subject, no trailing period.
+          subjectPattern: ^[a-z].*[^.]$
+          subjectPatternError: |
+            The subject "{subject}" in "{title}" must start lowercase and not end with a period.

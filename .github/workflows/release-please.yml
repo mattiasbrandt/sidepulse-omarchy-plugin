@@ -1,0 +1,40 @@
+name: Release Please
+
+# On every push to main, release-please reads the Conventional Commits since the
+# last release and keeps one release PR open with the next version, the
+# generated CHANGELOG.md section and the bumped manifest.json `version`.
+# Merging that PR tags vX.Y.Z and publishes the GitHub Release.
+#
+# It uses GITHUB_TOKEN, so the release PR does not trigger CI (GitHub does not
+# start workflows from GITHUB_TOKEN events). The release PR only touches
+# CHANGELOG.md, manifest.json's version and the release manifest. No check is
+# required on main today; if one becomes required, release-please needs a PAT
+# or GitHub App token here instead.
+#
+# Needs the repo setting "Allow GitHub Actions to create and approve pull
+# requests" (Settings > Actions > General).
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Release Please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7  # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

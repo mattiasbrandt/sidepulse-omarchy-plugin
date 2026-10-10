@@ -1,0 +1,133 @@
+name: CI
+
+# Every `uses:` is pinned to a full commit SHA with its `# vX.Y.Z`; Dependabot
+# moves the pins (.github/dependabot.yml).
+#
+# The Omarchy pin is the release the plugin is tested against. Keep it equal to
+# the version in README's Requirements, and move both together.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OMARCHY_REPO: basecamp/omarchy
+  OMARCHY_TAG: v4.0.4
+  OMARCHY_SHA: c668141e9c42b13c80c9ca4ea108e11708c5e8a5
+
+jobs:
+  validate:
+    name: plugin validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: No symlinks
+        # omarchy-plugin-validate rejects them too, but only once a manifest
+        # exists; this holds from the first commit.
+        run: |
+          links=$(git ls-files -s | awk '$1 == "120000" { print $4 }')
+          if [ -n "$links" ]; then
+            echo "::error::Omarchy plugins may not contain symlinks:"
+            echo "$links"
+            exit 1
+          fi
+
+      - name: Omarchy plugin validator
+        env:
+          VALIDATOR_SHA256: f7507e5042eb970e3dc918bdf6bf251c7557443892a77e71a17d7019ddde72c8
+        run: |
+          if [ ! -f manifest.json ]; then
+            echo "::notice::No manifest.json yet; the scaffold (#3) adds it and removes this guard."
+            exit 0
+          fi
+          validator="$RUNNER_TEMP/omarchy-plugin-validate"
+          curl -fsSL -o "$validator" \
+            "https://raw.githubusercontent.com/$OMARCHY_REPO/$OMARCHY_SHA/bin/omarchy-plugin-validate"
+          echo "$VALIDATOR_SHA256  $validator" | sha256sum -c -
+          bash "$validator" .
+
+  python:
+    name: python tests (${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is upstream SidePulse's floor; 3.14 is what its installer picks today.
+        python: ['3.10', '3.14']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Unit tests
+        run: python -I -m unittest discover -s spikes -p 'test_*.py' -v
+
+  qmllint:
+    name: qmllint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Arch ships the same qt6-declarative and quickshell builds Omarchy runs on.
+    # The digest pins the base image; `pacman -Syu` still brings current
+    # packages, which is the point: lint against what users have.
+    container: archlinux:base@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd
+    steps:
+      - name: Install Qt and Quickshell
+        run: pacman -Syu --noconfirm --needed git qt6-declarative quickshell
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Checkout Omarchy shell
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ env.OMARCHY_REPO }}
+          ref: ${{ env.OMARCHY_SHA }}
+          path: .omarchy
+          sparse-checkout: shell
+
+      - name: Lint
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          scripts/qmllint.sh .omarchy/shell
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: actionlint
+        # A pinned release binary checked against the digest actionlint's own
+        # checksums file lists, rather than an action. actionlint skips its
+        # ShellCheck pass silently when the binary is missing, so its absence
+        # fails the step instead.
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          command -v shellcheck
+          tarball="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $tarball" | sha256sum -c -
+          tar -xzf "$tarball" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color

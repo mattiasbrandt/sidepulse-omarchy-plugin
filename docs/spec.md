@@ -148,7 +148,7 @@ _Filled in during grilling, one entry per answered question._
   shell on protoarchy with the Dot; laptop checklist for battery/lid. No QML
   test harness.
 - **D16 Tracking:** public repo `mattiasbrandt/sidepulse-omarchy-plugin`, local
-  `~/Projects/sidepulse-omarchy-plugin`; this spec moves in as `docs/spec.md`; one
+  `~/Documents/GitHub/sidepulse-omarchy-plugin`; this spec moves in as `docs/spec.md`; one
   GitHub issue per plan slice plus one verification ticket.
 
 ## Spec

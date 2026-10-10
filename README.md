@@ -1,5 +1,9 @@
 # SidePulse for Omarchy
 
+[![CI](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/mattiasbrandt/sidepulse-omarchy-plugin)](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/releases/latest)
+[![License: MIT](https://img.shields.io/github/license/mattiasbrandt/sidepulse-omarchy-plugin)](LICENSE)
+
 An Omarchy bar widget for SidePulse devices and AI coding agents: it shows
 agent status in the bar and drives SidePulse devices, the way the macOS
 SidePulse menu-bar app does.
@@ -12,12 +16,10 @@ empty; the features land slice by slice, tracked in the
 
 ```sh
 omarchy plugin add https://github.com/mattiasbrandt/sidepulse-omarchy-plugin
-omarchy plugin enable io.github.mattiasbrandt.sidepulse --section right
 ```
 
-Plugins install disabled, so the first command only clones the plugin; the
-second places it in the bar. The SidePulse prerequisites that the helper needs
-land with the helper in #10.
+It asks whether to enable the widget and which bar section to put it in. The
+SidePulse prerequisites that the helper needs land with the helper in #10.
 
 ## Usage
 

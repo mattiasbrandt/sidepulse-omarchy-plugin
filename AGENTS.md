@@ -75,6 +75,10 @@ verification ticket's laptop checklist (#9).
 - Branch per issue with `gh issue develop <n> --name <branch> --checkout`.
   Work not tied to one slice (plan, docs) takes a plain branch: a branch
   linked to the parent #1 closes it when its PR merges.
+- **One PR per slice, plus at most one maintenance PR.** Small finds ride
+  along in the current slice's PR as their own commits. Docs, CI and process
+  fixes between slices accumulate on the single open maintenance PR
+  (`chore: …`) until the next slice starts; they never get a PR each.
 - **The PR title is the release record.** `main` takes squash merges only; the
   title becomes the single commit release-please reads. Write it as a
   Conventional Commit typed by what the change means for a user (`feat`,

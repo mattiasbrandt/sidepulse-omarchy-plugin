@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Workflow action pins (full commit SHAs with a `# vX.Y.Z` comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    # Conventional Commits prefix pinned explicitly ("chore(deps): ..."), so the
+    # PR title passes the title check and release-please treats it as no release.
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

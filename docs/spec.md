@@ -214,6 +214,16 @@ _Filled in during grilling, one entry per answered question._
 - **D16 Tracking:** public repo `mattiasbrandt/sidepulse-omarchy-plugin`, local
   `~/Documents/GitHub/sidepulse-omarchy-plugin`; this spec moves in as `docs/spec.md`; one
   GitHub issue per plan slice plus one verification ticket.
+- **D17 Versioning and releases (#14):** semantic versioning from
+  Conventional Commits. `main` takes squash merges only and the PR title is the
+  commit (checked in CI). release-please keeps a release PR with the version,
+  generated `CHANGELOG.md` and `manifest.json` `version`; merging it tags
+  `vX.Y.Z` and publishes the GitHub Release. Before 1.0.0, `feat` and breaking
+  changes bump the minor, `fix` the patch. CI on every PR: Omarchy's own
+  plugin validator at the pinned Omarchy tag, Python tests, qmllint against
+  the Omarchy shell in an Arch container, actionlint; SHA-pinned actions moved
+  by Dependabot. Reused from protoR2: the type → version table, SHA pins with
+  Dependabot, the checksum-verified actionlint step. Rules: `CONTRIBUTING.md`.
 
 ## Spec
 
@@ -324,6 +334,8 @@ logind sleep/lid inhibitor; reads `/proc` for session→window lookup; runs
 Thin vertical slices; each ends with validate + qmllint + pytest green and a
 live check in the shell. One GitHub issue per slice (D16), all sub-issues of
 #1 with native blocked-by edges.
+
+First, **CI and release automation** (#14, D17), before any plugin code.
 
 0. **Spikes** (#2) — answered; results are the *Spike #2* notes under D4–D8.
    - Band: widget child reparented into the bar window, full width (D7).

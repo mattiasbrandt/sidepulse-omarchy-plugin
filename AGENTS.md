@@ -54,14 +54,10 @@ These hold in every change. Each traces to a decision in `docs/spec.md`.
 
 ## Verify
 
-Run before calling a change done:
-
-```sh
-omarchy plugin validate .
-/usr/lib/qt6/bin/qmllint -I "$OMARCHY_PATH/shell" *.qml   # qmllint is not on PATH
-```
-
-The helper test runner arrives with #3; record its command here when it lands.
+Before calling a change done, run every check in the **Checks** table of
+`CONTRIBUTING.md` locally; CI runs the same set on the PR. `scripts/qmllint.sh`
+fails on any qmllint warning, and resolves Omarchy's `qs.*` imports the way
+Quickshell does.
 
 Live check: sync the tree into the plugin dir (the shell hot-reloads on save),
 then exercise the change in the real bar:
@@ -76,10 +72,20 @@ so a change to the singleton needs `omarchy restart shell` before the check.
 Hardware a change needs but this machine lacks (battery, lid) goes on the
 verification ticket's laptop checklist (#9).
 
-## Git and GitHub
+## Git, versioning and releases
 
-- Branch per issue with `gh issue develop <n> --name <branch> --checkout`; PRs
-  close their issue with `Fixes #<n>`.
-- Commit messages: imperative subject, body says why; no tool or model
-  attribution trailers.
+`CONTRIBUTING.md` owns the commit rules, type → version table and scopes.
+
+- Branch per issue with `gh issue develop <n> --name <branch> --checkout`.
+- **The PR title is the release record.** `main` takes squash merges only; the
+  title becomes the single commit release-please reads. Write it as a
+  Conventional Commit typed by what the change means for a user (`feat`,
+  `fix`, `!` for breaking), not by the files touched. The body says
+  `Fixes #<n>`.
+- Branch commits: imperative subject, body says why; Conventional form
+  welcome, not required. No tool or model attribution trailers.
+- release-please owns `CHANGELOG.md`, `manifest.json`'s `version`,
+  `.release-please-manifest.json` and the `v*` tags; leave them to its release
+  PR.
+- New or bumped actions are pinned to a full commit SHA with `# vX.Y.Z`.
 - Issue and PR prose ends with a one-line `//<harness> <model>` signature.

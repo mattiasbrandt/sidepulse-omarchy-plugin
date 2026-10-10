@@ -252,9 +252,10 @@ logind sleep/lid inhibitor; reads `/proc` for session→window lookup; runs
 ## Plan
 
 Thin vertical slices; each ends with validate + qmllint + pytest green and a
-live check in the shell. One GitHub issue per slice (D16).
+live check in the shell. One GitHub issue per slice (D16), all sub-issues of
+#1 with native blocked-by edges.
 
-0. **Spikes** (answer before building on them)
+0. **Spikes** (#2) (answer before building on them)
    - Can a bar-widget draw a full-width band at the bar edge? (D7; fallback:
      companion `panel` kind.)
    - Single helper across per-monitor widget copies (D5): owner election.
@@ -267,22 +268,22 @@ live check in the shell. One GitHub issue per slice (D16).
      cwd match + open `transcript_path` fd). If no unique match: resume-new.
    - **State source (D4):** confirm `latest.json` + `snapshot_from_statuses`
      tracks the live state as fast as `status --json` at a fraction of the cost.
-1. **Scaffold** — repo, manifest, MIT LICENSE, README skeleton, static icon
+1. **Scaffold** (#3) — repo, manifest, MIT LICENSE, README skeleton, static icon
    in the bar; `omarchy plugin validate` passes; installs via
    `omarchy plugin add <local path>`.
-2. **Helper core + live icon** — capability probe, `hello`/`state` events,
+2. **Helper core + live icon** (#10) — capability probe, `hello`/`state` events,
    Service.qml singleton, icon colour + tooltip follow real agents.
-3. **Sessions popup + open** — list, keyboard nav, focus-or-resume (D8).
-4. **Devices** — discovery, on/off via Manual mode, brightness, display mode.
-5. **Settings section** — hooks toggles, timeouts/retention, hook log
+3. **Sessions popup + open** (#4) — list, keyboard nav, focus-or-resume (D8).
+4. **Devices** (#5) — discovery, on/off via Manual mode, brightness, display mode.
+5. **Settings section** (#6) — hooks toggles, timeouts/retention, hook log
    viewer, capability problems.
-6. **Keep awake** — policy, predicate, inhibitor lifecycle.
-7. **Laptop** — battery reader, battery display, 7 s on plug/unplug, lid
+6. **Keep awake** (#7) — policy, predicate, inhibitor lifecycle.
+7. **Laptop** (#11) — battery reader, battery display, 7 s on plug/unplug, lid
    animations, LED handover.
-8. **Notch band** — wasm frames → band rendering.
-9. **Release prep** — README (install/usage/settings/requirements/remove/
+8. **Notch band** (#8) — wasm frames → band rendering.
+9. **Release prep** (#12) — README (install/usage/settings/requirements/remove/
    security), preview.png, push public, marketplace submission.
-10. **Verification ticket** — protoarchy live pass with the Dot; laptop
+10. **Verification ticket** (#9) — protoarchy live pass with the Dot; laptop
     checklist (battery, plug/unplug, lid inhibitor, lid animations).
 
 ## Appendix: research (2026-10-10)

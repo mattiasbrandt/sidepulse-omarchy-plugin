@@ -222,19 +222,22 @@ _Filled in during grilling, one entry per answered question._
 ```
 sidepulse-omarchy-plugin/                    (repo root = plugin root)
 ├── manifest.json        id io.github.mattiasbrandt.sidepulse, kinds [bar-widget]
+├── qmldir               declares the singleton below
+├── HelperProcess.qml    pragma Singleton: owns the one helper Process, refcounts
+│                        widget copies (stop at 0, debounced), parses NDJSON (D5)
 ├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup + IpcHandler
-├── Service.qml          owns the helper Process (singleton), parses NDJSON, exposes model
-├── Notch.qml            8-LED band renderer (frames from helper)
+├── Notch.qml            8-LED band, reparented into the bar window (D7)
 ├── *.qml / Model.js     popup sections: Sessions, Devices, KeepAwake, Settings, HookLog
 ├── helper/
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper
+├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
 ├── README.md  LICENSE (MIT)  preview.png  docs/spec.md
 ```
 
 ### Helper (`helper/sidepulse_omarchy.py`)
 
-- Launched by `Service.qml` as
+- Launched by the `HelperProcess` singleton as
   `~/.local/share/sidepulse/venv/bin/python -I <plugin>/helper/sidepulse_omarchy.py`
   (venv path overridable via widget setting `sidepulsePython`; default also
   tries `sidepulse`'s shebang interpreter).
@@ -247,13 +250,16 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `log` (recent hook decision rows), `error` (feature, message).
   Stdin commands: `set-device-enabled`, `set-brightness`, `set-display`,
   `set-policy`, `set-notch`, `set-agent-list`, `hooks-install`,
-  `hooks-uninstall`, `open-session`, `refresh`.
-- **Upstream reuse (D4):** state = watch `latest.json` (inotify) and run
+  `hooks-uninstall`, `open-session`, `refresh`. `open-session` answers with
+  the D8 lookup state (stopped → resumed, live → focused or located,
+  unresolved → explanation).
+- **Upstream reuse (D4):** state = watch the `latest.json` directory
+  (inotify `MOVED_TO latest.json`; the service writes tmp + rename) and run
   upstream's `snapshot_from_statuses` on it with
   `settings.idle_timeout_seconds` and retention, the same rules the Mac
   status bar applies, re-evaluated on a timer so ages and staleness advance.
-  Not polling `status --json`: it rescans the provider JSONL logs, and
-  `claude.jsonl` was already 2.2 MB after one evening (confirmed in spike 0).
+  Not polling `status --json`: it rescans the provider JSONL logs (measured
+  in #2: 0.4 ms for `latest.json` vs ~120 ms, growing with the logs).
   Never binds `events.sock` (it would stop the service driving LEDs); settings via `load_settings`/`save_settings`/`with_*`;
   devices via `discover_devices`; LED writes via `write_led_program`; keep-
   awake predicate via `KeepAwakeController.should_hold_for_mode`; battery
@@ -319,25 +325,20 @@ Thin vertical slices; each ends with validate + qmllint + pytest green and a
 live check in the shell. One GitHub issue per slice (D16), all sub-issues of
 #1 with native blocked-by edges.
 
-0. **Spikes** (#2) (answer before building on them)
-   - Can a bar-widget draw a full-width band at the bar edge? (D7; fallback:
-     companion `panel` kind.)
-   - Single helper across per-monitor widget copies (D5): owner election.
-   - `sdled.wasm` under wasmtime produces the same frames as upstream's
-     JavaScriptCore path for the built-in programs.
-   - **Session → process (D8):** upstream hook lines carry no pid (keys
-     verified: `session_id`, `cwd`, `transcript_path`, origin strings only;
-     `hook.py` walks the process tree at hook time but doesn't record the pid).
-     Find the live agent by a `/proc` scan (cmdline contains the session id, or
-     cwd match + open `transcript_path` fd). If no unique match: resume-new.
-   - **State source (D4):** confirm `latest.json` + `snapshot_from_statuses`
-     tracks the live state as fast as `status --json` at a fraction of the cost.
-1. **Scaffold** (#3) — repo, manifest, MIT LICENSE, README skeleton, static icon
+0. **Spikes** (#2) — answered; results are the *Spike #2* notes under D4–D8.
+   - Band: widget child reparented into the bar window, full width (D7).
+   - Single helper: plugin QML singleton, refcounted; survives reload/disable (D5).
+   - wasm: wasmtime port byte-identical to an independent driver, 117/117 (D6).
+   - Session → window: stopped / live / unresolved lookup (D8).
+   - State source: `latest.json` + upstream rules, 0.4 ms vs ~120 ms (D4).
+1. **Scaffold** (#3) — repo, manifest, MIT LICENSE, README skeleton, dev test
+   environment and runner (record the command in AGENTS.md), static icon
    in the bar; `omarchy plugin validate` passes; installs via
    `omarchy plugin add <local path>`.
 2. **Helper core + live icon** (#10) — capability probe, `hello`/`state` events,
-   Service.qml singleton, icon colour + tooltip follow real agents.
-3. **Sessions popup + open** (#4) — list, keyboard nav, focus-or-resume (D8).
+   `HelperProcess` singleton (refcounted), icon colour + tooltip follow real
+   agents.
+3. **Sessions popup + open** (#4) — list, keyboard nav, three-state open (D8).
 4. **Devices** (#5) — discovery, on/off via Manual mode, brightness, display mode.
 5. **Settings section** (#6) — hooks toggles, timeouts/retention, hook log
    viewer, capability problems.

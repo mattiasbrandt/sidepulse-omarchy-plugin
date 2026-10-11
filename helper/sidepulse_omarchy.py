@@ -37,10 +37,11 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 PROTOCOL_VERSION = 1
 HELPER_VERSION = "dev"
@@ -85,6 +86,10 @@ REQUIRED_NAMES = {
         ),
         "sidepulse.ipc": ("default_latest_state_path",),
         "sidepulse.settings": ("load_settings",),
+    },
+    "sessions": {
+        "sidepulse.session_actions": ("session_resume_command",),
+        "sidepulse.models": ("AgentMode",),
     },
     "service": {"sidepulse.service_launch": ("service_is_running",)},
     "devices": {
@@ -140,12 +145,6 @@ def _probe_wasmtime() -> dict[str, Any]:
     except ImportError:
         return {"ok": False, "reason": WASMTIME_REASON}
     return {"ok": True, "reason": ""}
-
-
-def idle_timeout_seconds() -> float:
-    from sidepulse.settings import load_settings
-
-    return load_settings().idle_timeout_seconds
 
 
 def snapshot_from_statuses(statuses: list[Any], *, now: datetime, idle_timeout_seconds: float) -> Any:
@@ -421,6 +420,505 @@ class DirWatch:
         return names
 
 
+# --- Sessions (D8): a session's process, window and the three-state lookup ----
+
+PROVIDER_BINARIES = {
+    "claude": "claude",
+    "codex": "codex",
+    "cursor": "cursor-agent",
+    "grok": "grok",
+    "junie": "junie",
+}
+# Processes that only host other processes: a session's owner is never one of them.
+SHELLS = frozenset({"bash", "dash", "fish", "sh", "zsh"})
+COMMAND_TIMEOUT_SECONDS = 10.0
+HYPRLAND_ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
+
+
+class CommandFailed(Exception):
+    """A command the session lookup or open needs (herdr, tmux, hyprctl) failed; the message says why."""
+
+
+class Proc:
+    """Reads process facts from a /proc tree, so tests can supply a fake one."""
+
+    def __init__(self, root: Path = Path("/proc")) -> None:
+        self.root = root
+
+    def _stat_fields(self, pid: int) -> list[str] | None:
+        try:
+            stat = (self.root / str(pid) / "stat").read_text()
+        except OSError:
+            return None
+        # The comm field may contain spaces and parens; fields resume after the last ')'.
+        return stat.rsplit(")", 1)[1].split()
+
+    def starttime(self, pid: int) -> str | None:
+        fields = self._stat_fields(pid)
+        return fields[19] if fields else None
+
+    def ppid(self, pid: int) -> int | None:
+        fields = self._stat_fields(pid)
+        return int(fields[1]) if fields else None
+
+    def has_terminal(self, pid: int) -> bool:
+        fields = self._stat_fields(pid)
+        return bool(fields) and fields[4] != "0"
+
+    def comm(self, pid: int) -> str | None:
+        try:
+            return (self.root / str(pid) / "comm").read_text().strip()
+        except OSError:
+            return None
+
+    def chain(self, pid: int) -> list[int]:
+        """pid and its ancestors, nearest first."""
+        found: list[int] = []
+        current: int | None = pid
+        while current is not None and current > 1 and current not in found:
+            found.append(current)
+            current = self.ppid(current)
+        return found
+
+    def pids_of(self, binary: str) -> list[int]:
+        found = []
+        for entry in self.root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                if (entry / "comm").read_text().strip() == binary[:15]:
+                    found.append(int(entry.name))
+            except OSError:
+                continue
+        return sorted(found)
+
+    def cwd(self, pid: int) -> str | None:
+        try:
+            return os.readlink(self.root / str(pid) / "cwd")
+        except OSError:
+            return None
+
+    def cmdline(self, pid: int) -> list[str]:
+        try:
+            raw = (self.root / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return []
+        return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+
+
+def claude_session_ids(proc: Proc, home: Path) -> dict[int, str]:
+    """pid -> the session Claude's session file says it runs, for pids that still have the recorded start time."""
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "sessions"
+    owners: dict[int, str] = {}
+    for path in root.glob("*.json"):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        pid = int(data["pid"])
+        if proc.starttime(pid) == str(data.get("procStart")):
+            owners[pid] = data.get("sessionId")
+    return owners
+
+
+def claude_pid(session_id: str, proc: Proc, home: Path) -> int | None:
+    return next((pid for pid, owned in claude_session_ids(proc, home).items() if owned == session_id), None)
+
+
+def grok_pid(session_id: str, proc: Proc, home: Path) -> int | None:
+    try:
+        entries = json.loads((home / ".grok" / "active_sessions.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for entry in entries:
+        if entry.get("session_id") == session_id and proc.starttime(int(entry["pid"])):
+            return int(entry["pid"])
+    return None
+
+
+EXACT_SOURCES = {"claude": claude_pid, "grok": grok_pid}
+
+
+def names_session(args: list[str], session_id: str) -> bool:
+    """True when an argument is the session id itself or `--flag=<id>`."""
+    return any(arg == session_id or arg.endswith("=" + session_id) for arg in args)
+
+
+def find_process(provider: str, session_id: str, cwd: str | None, proc: Proc, home: Path) -> dict:
+    """Return {"state": stopped|live|unresolved, ...} for the session's process."""
+    exact = EXACT_SOURCES.get(provider)
+    if exact is not None:
+        pid = exact(session_id, proc, home)
+        if pid is not None:
+            return {"state": "live", "pid": pid, "proof": "session-file"}
+
+    binary = PROVIDER_BINARIES.get(provider)
+    if binary is None:
+        return {"state": "unresolved", "reason": f"unknown provider {provider!r}", "candidates": []}
+    # Interactive agents hold a terminal; daemons such as `codex app-server` do not.
+    pids = [pid for pid in proc.pids_of(binary) if proc.has_terminal(pid)]
+    # A Claude process whose session file names another session is not a candidate for this one,
+    # whatever its command line says: `claude --resume X` still shows X after the process moved on.
+    if provider == "claude":
+        elsewhere = {pid for pid, owned in claude_session_ids(proc, home).items() if owned != session_id}
+        pids = [pid for pid in pids if pid not in elsewhere]
+    by_cmdline = [pid for pid in pids if names_session(proc.cmdline(pid), session_id)]
+    if len(by_cmdline) == 1:
+        return {"state": "live", "pid": by_cmdline[0], "proof": "cmdline"}
+    if len(by_cmdline) > 1:
+        return {"state": "unresolved", "reason": "several processes name this session", "candidates": by_cmdline}
+    if cwd is None:
+        return {"state": "unresolved", "reason": "session has no cwd to check", "candidates": pids}
+    in_cwd = [pid for pid in pids if proc.cwd(pid) == cwd]
+    if in_cwd:
+        return {"state": "unresolved", "reason": f"{binary} runs in {cwd} but nothing ties it to this session",
+                "candidates": in_cwd}
+    return {"state": "stopped"}
+
+
+def ai_title(session_id: str, cwd: str, home: Path) -> str | None:
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "projects"
+    transcript = root / cwd.replace("/", "-") / f"{session_id}.jsonl"
+    title = None
+    try:
+        with transcript.open() as handle:
+            for line in handle:
+                if '"ai-title"' in line:
+                    title = json.loads(line).get("aiTitle") or title
+    except OSError:
+        return None
+    return title
+
+
+def run_command(argv: list[str]) -> subprocess.CompletedProcess:
+    """Runs one command for the session lookup. A binary that cannot run raises CommandFailed."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CommandFailed(f"{argv[0]} cannot run: {exc}") from exc
+
+
+def hypr_clients(run: Callable[[list[str]], subprocess.CompletedProcess]) -> list[dict]:
+    done = run(["hyprctl", "clients", "-j"])
+    if done.returncode != 0:
+        raise CommandFailed(f"hyprctl clients: {(done.stderr or done.stdout).strip() or 'exit ' + str(done.returncode)}")
+    return json.loads(done.stdout)
+
+
+def find_window(provider: str, session_id: str, cwd: str | None, pid: int, proc: Proc, home: Path,
+                clients: list[dict]) -> dict:
+    """Walk the ancestors to the first pid that owns Hyprland clients, then pick one of them."""
+    by_pid: dict[int, list[dict]] = {}
+    for client in clients:
+        by_pid.setdefault(client["pid"], []).append(client)
+    chain = proc.chain(pid)
+    for owner in chain:
+        if owner not in by_pid:
+            continue
+        candidates = by_pid[owner]
+        if len(candidates) > 1 and provider == "claude" and cwd:
+            title = ai_title(session_id, cwd, home)
+            if title:
+                candidates = [c for c in candidates if title in c["title"]]
+        if len(candidates) == 1:
+            return {"action": "focus", "address": candidates[0]["address"], "title": candidates[0]["title"]}
+        return {"action": "ambiguous-window", "candidates": len(candidates)}
+    return {"action": "no-window", "ancestry": chain}
+
+
+Run = Callable[[list[str]], subprocess.CompletedProcess]
+
+
+def herdr_panes_holding(chain: list[int], run: Run) -> list[str]:
+    """The herdr panes whose foreground processes include the session's process or an ancestor."""
+    panes = _json_output(run(["herdr", "pane", "list"]))["result"]["panes"]
+    holding = []
+    for pane in panes:
+        info = _json_output(run(["herdr", "pane", "process-info", "--pane", pane["pane_id"]]))
+        pids = {entry["pid"] for entry in info["result"]["process_info"]["foreground_processes"]}
+        if pids.intersection(chain):
+            holding.append(pane["pane_id"])
+    return holding
+
+
+def herdr_client_pids(proc: Proc) -> list[int]:
+    """Attached herdr clients: a herdr with a terminal that is not the server."""
+    return [pid for pid in proc.pids_of("herdr")
+            if proc.has_terminal(pid) and "server" not in proc.cmdline(pid)[1:]]
+
+
+def tmux_panes_holding(chain: list[int], run: Run) -> list[tuple[str, str]]:
+    """(pane id, session name) of the tmux panes whose shell is the session's process or an ancestor."""
+    done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_name}"])
+    if done.returncode != 0:
+        if "no server running" in done.stderr:
+            return []
+        raise CommandFailed(f"tmux list-panes: {(done.stderr or done.stdout).strip()}")
+    holding = []
+    for line in done.stdout.splitlines():
+        pane_pid, pane_id, session = line.split(" ", 2)
+        if int(pane_pid) in chain:
+            holding.append((pane_id, session))
+    return holding
+
+
+def tmux_client_pids(run: Run) -> list[int]:
+    done = run(["tmux", "list-clients", "-F", "#{client_pid}"])
+    if done.returncode != 0:
+        raise CommandFailed(f"tmux list-clients: {(done.stderr or done.stdout).strip()}")
+    return [int(line) for line in done.stdout.split()]
+
+
+def _json_output(done: subprocess.CompletedProcess) -> Any:
+    if done.returncode != 0:
+        raise CommandFailed((done.stderr or done.stdout).strip() or f"exit {done.returncode}")
+    return json.loads(done.stdout)
+
+
+def client_window(pids: list[int], proc: Proc, home: Path, clients: list[dict]) -> dict | None:
+    """Where a multiplexer's client runs. None when no client is attached (open one, D8)."""
+    if not pids:
+        return None
+    windows = [find_window("multiplexer", "", None, pid, proc, home, clients) for pid in pids]
+    focus = [window for window in windows if window["action"] == "focus"]
+    if len(focus) == 1:
+        return focus[0]
+    if len(pids) == 1:
+        return windows[0]
+    return {"action": "ambiguous-window", "candidates": len(pids)}
+
+
+def running_in(chain: list[int], proc: Proc) -> str:
+    """The nearest ancestor that is not a shell: where an agent with no window runs."""
+    for ancestor in chain[1:]:
+        name = proc.comm(ancestor)
+        if name and name not in SHELLS:
+            return f"{name} (pid {ancestor})"
+    nearest = chain[1] if len(chain) > 1 else chain[0]
+    return f"{proc.comm(nearest) or 'an unknown parent'} (pid {nearest})"
+
+
+def live_route(provider: str, session_id: str, cwd: str | None, pid: int, proc: Proc, home: Path,
+               clients: list[dict], run: Run) -> dict:
+    """Where a live session runs (D8): its window, else its herdr pane, else its tmux pane, else nowhere known.
+
+    Each multiplexer that cannot be asked is reported in `notes` and the lookup goes on; the
+    result is never a guess.
+    """
+    window = find_window(provider, session_id, cwd, pid, proc, home, clients)
+    if window["action"] != "no-window":
+        return window
+    chain = window["ancestry"]
+    notes: list[str] = []
+    try:
+        panes = herdr_panes_holding(chain, run)
+    except CommandFailed as exc:
+        panes = []
+        notes.append(f"herdr: {exc}")
+    if len(panes) > 1:
+        return {"action": "ambiguous-pane", "multiplexer": "herdr", "candidates": panes, "ancestry": chain}
+    if panes:
+        return {"action": "herdr", "pane": panes[0],
+                "client": client_window(herdr_client_pids(proc), proc, home, clients)}
+    try:
+        tmux = tmux_panes_holding(chain, run)
+        if len(tmux) > 1:
+            return {"action": "ambiguous-pane", "multiplexer": "tmux", "candidates": [p for p, _ in tmux],
+                    "ancestry": chain}
+        if tmux:
+            pane, session = tmux[0]
+            return {"action": "tmux", "pane": pane, "session": session,
+                    "client": client_window(tmux_client_pids(run), proc, home, clients)}
+    except CommandFailed as exc:
+        notes.append(f"tmux: {exc}")
+    return {"action": "explain", "where": running_in(chain, proc), "ancestry": chain, "notes": notes}
+
+
+def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None = None,
+            home: Path | None = None, clients: list[dict] | None = None, run: Run = run_command) -> dict:
+    proc = proc or Proc()
+    home = home or Path.home()
+    found = find_process(provider, session_id, cwd, proc, home)
+    if found["state"] == "stopped":
+        return {**found, "action": "resume"}
+    if found["state"] == "unresolved":
+        return {**found, "action": "explain"}
+    try:
+        window_clients = hypr_clients(run) if clients is None else clients
+    except CommandFailed as exc:
+        return {**found, "action": "explain", "where": running_in(proc.chain(found["pid"]), proc),
+                "notes": [str(exc)]}
+    return {**found, **live_route(provider, session_id, cwd, found["pid"], proc, home, window_clients, run)}
+
+
+# --- Open a session (D8): act on the lookup's plan ---------------------------
+
+Spawn = Callable[[list[str], str | None], None]
+
+
+SPAWN_SETTLE_SECONDS = 1.0
+
+
+def spawn_detached(argv: list[str], cwd: str | None) -> None:
+    """Starts a terminal (or any command) that outlives the helper.
+
+    Raises CommandFailed when it cannot start, or when it exits with an error
+    within SPAWN_SETTLE_SECONDS (no default terminal, a resume command that
+    fails at once), with what it printed (D14). Its stderr goes to a temporary
+    file, not a pipe: a terminal that keeps running would block once a pipe
+    nobody reads fills up. A clean exit is success, since single-instance
+    terminals hand the window to a running one and exit 0.
+    """
+    with tempfile.TemporaryFile() as err:
+        try:
+            child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=err, start_new_session=True)
+        except OSError as exc:
+            raise CommandFailed(f"{argv[0]} cannot start: {exc}") from exc
+        try:
+            code = child.wait(timeout=SPAWN_SETTLE_SECONDS)
+        except subprocess.TimeoutExpired:
+            return  # still running: the terminal is up
+        if code != 0:
+            err.seek(0)
+            said = err.read().decode(errors="replace").strip().splitlines()
+            raise CommandFailed(f"{argv[0]} exited {code}" + (f": {said[-1]}" if said else ""))
+
+
+def focus_window(address: str, title: str, run: Run) -> tuple[bool, str]:
+    """Raise a Hyprland window by address (spikes/#2: hyprctl exits 0 even when the address is gone)."""
+    if not HYPRLAND_ADDRESS.fullmatch(address):
+        return False, f"Not focusing {title}: {address!r} is not a window address"
+    done = run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'])
+    output = (done.stdout + done.stderr).strip()
+    if done.returncode != 0 or "window not found" in output:
+        return False, f"Could not focus {title}: {output or 'exit ' + str(done.returncode)}"
+    return True, f"Focused {title}."
+
+
+def _open_client(client: dict | None, attach: list[str], name: str, spawn: Spawn, run: Run) -> tuple[bool, str]:
+    """A multiplexer's client: raise its window, or start one attached when none runs."""
+    if client is None:
+        spawn(attach, None)
+        return True, f"Opened a terminal attached to {name}."
+    if client["action"] == "focus":
+        return focus_window(client["address"], client["title"], run)
+    return False, f"{name} is attached, but its window is not known: {describe_window(client)}."
+
+
+def describe_window(window: dict) -> str:
+    if window["action"] == "ambiguous-window":
+        return f"{window['candidates']} windows match"
+    return "no Hyprland window owns its process"
+
+
+def explain_message(plan: dict) -> str:
+    if plan.get("state") == "unresolved":
+        return f"Not resumed or focused: {plan['reason']}."
+    if plan["action"] == "ambiguous-window":
+        return f"{plan['candidates']} windows match this session; not guessing which to focus."
+    if plan["action"] == "ambiguous-pane":
+        return f"{len(plan['candidates'])} {plan['multiplexer']} panes hold this session; not guessing which to focus."
+    notes = "".join(f" {note}." for note in plan.get("notes", []))
+    return f"Running in {plan['where']}; no window or pane to focus.{notes}"
+
+
+def perform_open(plan: dict, status: Any, run: Run, spawn: Spawn) -> tuple[bool, str]:
+    """Carry out the plan from resolve(): resume (upstream's command, D8), focus or explain. Never both."""
+    action = plan["action"]
+    if action == "resume":
+        from sidepulse.session_actions import session_resume_command
+
+        command = session_resume_command(status)
+        if command is None:
+            return False, f"{status.display_name} has no session id to resume."
+        try:
+            spawn(["xdg-terminal-exec", "--", "sh", "-c", command], status.cwd)
+        except CommandFailed as exc:
+            return False, f"Could not resume {status.display_name}: {exc}"
+        return True, f"Resuming {status.display_name} in a terminal."
+    if action == "focus":
+        return focus_window(plan["address"], plan["title"], run)
+    if action == "herdr":
+        _checked(run(["herdr", "agent", "focus", plan["pane"]]), "herdr agent focus")
+        return _open_client(plan["client"], ["xdg-terminal-exec", "--", "herdr"], "herdr", spawn, run)
+    if action == "tmux":
+        _checked(run(["tmux", "select-window", "-t", plan["pane"]]), "tmux select-window")
+        _checked(run(["tmux", "select-pane", "-t", plan["pane"]]), "tmux select-pane")
+        attach = ["xdg-terminal-exec", "--", "tmux", "attach-session", "-t", plan["session"]]
+        return _open_client(plan["client"], attach, "tmux", spawn, run)
+    return False, explain_message(plan)
+
+
+def _checked(done: subprocess.CompletedProcess, what: str) -> None:
+    if done.returncode != 0:
+        raise CommandFailed(f"{what}: {(done.stderr or done.stdout).strip() or 'exit ' + str(done.returncode)}")
+
+
+# --- The popup's session list (D13): upstream's recent-session rules -----------
+
+# Upstream's STATUS_BAR_SESSION_HISTORY_LIMIT (status_bar.py). tests/test_sessions.py
+# reads the upstream value and fails when it drifts.
+SESSION_LIMIT = 10
+
+
+def menu_status_sort_key(status: Any) -> tuple[int, int, float]:
+    subagent_penalty = 1 if ":agent:" in status.agent_id else 0
+    return (status.priority, subagent_penalty, -status.updated_at.timestamp())
+
+
+def recent_statuses(snapshot: Any, retention_seconds: float, limit: int = SESSION_LIMIT) -> list[Any]:
+    """Upstream's recent_statuses (status_bar.py): the fresh statuses and the completed
+    stale ones within retention, one per session, most urgent and newest first.
+
+    The menu-bar code cannot be imported on Linux, so the rules are copied here and
+    tests/test_sessions.py runs upstream's own functions against them.
+    """
+    from sidepulse.models import AgentMode
+
+    now = snapshot.collected_at
+    listed = list(snapshot.statuses)
+    listed.extend(
+        status for status in snapshot.stale_statuses
+        if status.mode == AgentMode.COMPLETED and status.age_seconds(now) <= retention_seconds
+    )
+    best: dict[tuple[str, ...], Any] = {}
+    passthrough: list[Any] = []
+    for status in listed:
+        if not status.session_id:
+            passthrough.append(status)
+            continue
+        key = ("session", status.provider.lower(), status.session_id)
+        previous = best.get(key)
+        if previous is None or menu_status_sort_key(status) < menu_status_sort_key(previous):
+            best[key] = status
+    ordered = [*best.values(), *passthrough]
+    ordered.sort(key=lambda status: (status.priority, -status.updated_at.timestamp()))
+    return ordered[:limit]
+
+
+def sessions_event(statuses: list[Any]) -> dict[str, Any]:
+    """The popup's Sessions rows. updated_ms lets the popup age them; the helper sends nothing per second."""
+    items = []
+    for status in statuses:
+        state = state_for_mode(status.mode.value)
+        items.append({
+            "provider": status.provider.lower(),
+            "session_id": status.session_id,
+            "agent_id": status.agent_id,
+            "name": status.display_name,
+            "project": Path(status.cwd).name if status.cwd else "",
+            "cwd": status.cwd,
+            "state": state,
+            "label": STATE_LABELS[state],
+            "colour": STATE_COLOURS[state],
+            "message": status.message or "",
+            "updated_ms": int(status.updated_at.timestamp() * 1000),
+            "resumable": bool(status.session_id),
+        })
+    return {"type": "sessions", "items": items}
+
+
 class Helper:
     def __init__(self, out: TextIO) -> None:
         self.out = out
@@ -430,6 +928,9 @@ class Helper:
         self.last_state: dict[str, Any] | None = None
         self.last_setup: dict[str, Any] | None = None
         self.last_devices: dict[str, Any] | None = None
+        self.last_sessions: dict[str, Any] | None = None
+        # The statuses the popup lists, from the last good read of latest.json (D19 rule: none while unreadable).
+        self.session_statuses: list[Any] = []
         self.devices: list[Device] = []
         self.device_count: int | None = None
         # The widget's remembered displays. None until it sends them: a fresh
@@ -480,11 +981,15 @@ class Helper:
     def refresh_state(self, force: bool = False) -> None:
         if self.latest_path is None:
             return
+        from sidepulse.settings import load_settings
+
+        statuses: list[Any] = []
         try:
+            settings = load_settings()
             snapshot = read_snapshot(
                 self.latest_path,
                 now=datetime.now(timezone.utc),
-                idle_timeout_seconds=idle_timeout_seconds(),
+                idle_timeout_seconds=settings.idle_timeout_seconds,
             )
         except (OSError, ValueError) as exc:
             message = f"cannot read {self.latest_path}: {exc}"
@@ -493,8 +998,18 @@ class Helper:
         else:
             self.resolve("state")
             event = state_event(snapshot)
+            if self.capabilities["sessions"]["ok"]:
+                statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
         if force or event != self.last_state:
             self.last_state = event
+            self.emit(event)
+        self.session_statuses = statuses
+        self.refresh_sessions(force)
+
+    def refresh_sessions(self, force: bool = False) -> None:
+        event = sessions_event(self.session_statuses)
+        if force or event != self.last_sessions:
+            self.last_sessions = event
             self.emit(event)
 
     def refresh_setup(self, force: bool = False) -> None:
@@ -599,6 +1114,31 @@ class Helper:
             self.error("devices", f"{device.name}: {exc}")
         self.refresh_devices(force=True)
 
+    def open_session(self, command: dict[str, Any]) -> None:
+        """Answer with a `result`: the D8 lookup's outcome for one listed session (ok closes the popup)."""
+        provider = command.get("provider")
+        session_id = command.get("session_id")
+        if not isinstance(provider, str) or not isinstance(session_id, str):
+            self.error("command", "open-session needs a provider and a session_id")
+            return
+        if not self.capabilities.get("sessions", {}).get("ok"):
+            self.error("command", "open-session is unavailable: " + self.capabilities.get("sessions", {}).get("reason", ""))
+            return
+        status = next((s for s in self.session_statuses
+                       if s.provider.lower() == provider and s.session_id == session_id), None)
+        if status is None:
+            self.emit({"type": "result", "command": "open-session", "ok": False,
+                       "message": "That session is no longer listed; refresh the popup and try again."})
+            return
+        plan: dict[str, Any] = {"action": "explain"}
+        try:
+            plan = resolve(provider, session_id, status.cwd)
+            ok, message = perform_open(plan, status, run_command, spawn_detached)
+        except CommandFailed as exc:
+            ok, message = False, f"Could not open {status.display_name}: {exc}"
+        self.emit({"type": "result", "command": "open-session", "ok": ok, "action": plan["action"],
+                   "message": message})
+
     def handle_line(self, raw: bytes) -> None:
         try:
             command = json.loads(raw)
@@ -616,6 +1156,8 @@ class Helper:
             self.set_displays(command)
         elif name == "set-brightness":
             self.set_brightness(command)
+        elif name == "open-session":
+            self.open_session(command)
         else:
             self.error("command", f"unknown command {name!r}")
 

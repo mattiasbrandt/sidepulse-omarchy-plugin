@@ -5,6 +5,7 @@ import QtQuick.Controls
 import qs.Commons
 import qs.Ui
 import "helper"
+import "helper/sessions.mjs" as Sessions
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
@@ -87,7 +88,11 @@ Panel {
   readonly property var deviceRowNames: HelperProcess.devices.length > 0
     ? HelperProcess.devices.map(function (device) { return "device:" + device.id })
     : ["devices"]
-  readonly property var sectionRows: ["sessions"].concat(deviceRowNames, ["keep-awake", "settings"])
+  // The Sessions rows: one per listed session, or one placeholder while there are none.
+  readonly property var sessionRowNames: HelperProcess.sessions.length > 0
+    ? HelperProcess.sessions.map(function (session, index) { return Sessions.sessionRow(index) })
+    : ["sessions"]
+  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["keep-awake", "settings"])
   // Battery joins with #11, offered only where there is a battery.
   readonly property var displayOrder: ["agent", "off"]
   readonly property var displayChoices: [
@@ -109,6 +114,22 @@ Panel {
   function displayOf(deviceId) {
     const value = deviceDisplays[deviceId]
     return displayOrder.indexOf(value) >= 0 ? value : "agent"
+  }
+
+  // Session ages advance while the popup is open; the rows read this clock.
+  property real nowMs: Date.now()
+  Timer {
+    id: ageTimer
+    interval: 1000
+    repeat: true
+    running: root.opened
+    onTriggered: root.nowMs = Date.now()
+  }
+
+  // Enter or a click on a listed session (D8). A session without an id cannot be looked up.
+  function openSession(index) {
+    const session = HelperProcess.sessions[index]
+    if (session && session.resumable) HelperProcess.openSession(session)
   }
 
   function deviceById(deviceId) {
@@ -185,6 +206,10 @@ Panel {
 
   function activateCursor() {
     const name = cursorRow
+    if (name.indexOf("session:") === 0) {
+      openSession(parseInt(name.substring(8), 10))
+      return
+    }
     if (name.indexOf("device:") === 0) {
       cycleDisplay(name.substring(7))
       return
@@ -211,12 +236,24 @@ Panel {
   }
 
   onDeviceDisplaysChanged: if (HelperProcess.helloReceived) HelperProcess.setDisplays(deviceDisplays)
+  // Focusing or resuming a session closes the popup; a failure stays on show with its reason.
+  Connections {
+    target: HelperProcess
+    function onLastResultChanged() {
+      const result = HelperProcess.lastResult
+      if (result && result.command === "open-session" && result.ok === true) root.close()
+    }
+  }
+
   Component.onDestruction: HelperProcess.unregister()
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 
+  // A result from an earlier open is stale once the popup opens again.
   onOpenedChanged: if (opened) {
     cursorActive = false
     cursorIndex = 0
+    nowMs = Date.now()
+    HelperProcess.lastResult = null
     if (panelFlick) panelFlick.contentY = 0
     HelperProcess.refresh()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
@@ -383,9 +420,23 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            // Keyed on the count, as the devices are: each sessions event replaces the list.
+            Repeater {
+              model: HelperProcess.sessions.length
+
+              SessionRow {
+                required property int index
+                width: parent.width
+                session: HelperProcess.sessions[index] || ({})
+                rowIndex: index
+              }
+            }
+
             PlaceholderRow {
+              visible: HelperProcess.sessions.length === 0
               width: parent.width
               rowName: "sessions"
+              label: "No recent sessions"
             }
           }
 
@@ -527,6 +578,94 @@ Panel {
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
+      }
+    }
+  }
+
+  // One listed session (D13): provider, project, state, last message and age.
+  // Enter or a click opens it (D8); a row without a session id only shows.
+  component SessionRow: CursorSurface {
+    id: sessionRow
+    required property var session
+    required property int rowIndex
+
+    readonly property string rowName: Sessions.sessionRow(rowIndex)
+    readonly property string age: Sessions.formatAge(Sessions.ageSeconds(session.updated_ms, root.nowMs))
+    readonly property color stateColour: session.colour ? session.colour : root.dim
+
+    hasCursor: root.rowHasCursor(rowName)
+    foreground: root.foreground
+    implicitHeight: sessionColumn.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: sessionRow.session.resumable ? Qt.PointingHandCursor : Qt.ArrowCursor
+      onEntered: root.focusRow(sessionRow.rowName)
+      onClicked: root.openSession(sessionRow.rowIndex)
+    }
+
+    Column {
+      id: sessionColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(2)
+
+      Row {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Text {
+          textFormat: Text.PlainText
+          text: Sessions.providerLabel(sessionRow.session.provider)
+          color: sessionRow.stateColour
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          id: projectText
+          textFormat: Text.PlainText
+          width: Math.max(0, parent.width - stateText.implicitWidth - ageText.implicitWidth - Style.space(24))
+          text: sessionRow.session.project || sessionRow.session.name || ""
+          elide: Text.ElideRight
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          id: stateText
+          textFormat: Text.PlainText
+          text: sessionRow.session.label || ""
+          color: sessionRow.stateColour
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+
+        Text {
+          id: ageText
+          textFormat: Text.PlainText
+          text: sessionRow.age
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: text !== ""
+        width: parent.width
+        text: Sessions.oneLine(sessionRow.session.message)
+        elide: Text.ElideRight
+        maximumLineCount: 1
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
     }
   }

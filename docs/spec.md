@@ -197,6 +197,19 @@ _Filled in during grilling, one entry per answered question._
     `select-window`/`select-pane`, `switch-client`; not exercised live). Any
     other ancestor, or an ambiguous title match: show "running in <ancestor>
     (pid)", no guess.
+  *Amended in #4:* implemented in `helper/sidepulse_omarchy.py`. The herdr
+  pane is the one whose foreground processes include the session's process or
+  an ancestor (two panes: ambiguous, no guess); tmux matches `pane_pid` the same
+  way. The client is a herdr process without `server` in its argv, or a tmux
+  client, and its window is found by ancestry. No client: a terminal attached
+  to the multiplexer opens (`xdg-terminal-exec -- herdr`, `… -- tmux
+  attach-session -t <session>`). A multiplexer that cannot be asked is named in
+  the explanation, not hidden. herdr focus and tmux selection are not exercised
+  live, since they move the user's panes (#4 checklist).
+  *Amended in #4:* a stopped session resumes with upstream's
+  `session_resume_command` run as `xdg-terminal-exec -- sh -c <command>` in the
+  session cwd. Only the helper's own latest list is searched, so a session that
+  has dropped out of it answers "no longer listed".
 - **D9 LED on/off:** per-device. Off = set that device's `led_display` to
   `custom` in upstream settings.json (service skips it; re-read each 1 s)
   and write `off`; On = set back to `agent`. Persists; uses upstream's own
@@ -341,6 +354,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   │                    lifecycle.mjs's actions, parses NDJSON (D5)
 │   ├── lifecycle.mjs    refcount, debounced stop, restart backoff as pure
 │   │                    functions (*amended in #28*)
+│   ├── sessions.mjs     the Sessions rows' age, provider label and cursor name (*added in #4*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
@@ -378,6 +392,14 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   schedule. The helper re-runs the rules every second and re-checks setup every
   five seconds, so a stopped service or an unplugged device shows up without a
   restart.
+  *Amended in #4:* `sessions` (the popup's Sessions rows, at most 10, upstream's
+  recent-session rules, D13): provider, session_id, name, project (cwd
+  basename), state, label, colour, message, `updated_ms` (the popup ages the
+  rows itself, so the helper sends nothing per second), `resumable` (has a
+  session id). Re-sent on change; empty while `latest.json` is unreadable.
+  `open-session` (`provider`, `session_id`) answers with a `result`
+  (`command: "open-session"`, `ok`, `action`, `message`) and no state change;
+  `ok` closes the popup.
 - **Upstream reuse (D4):** state = watch the `latest.json` directory
   (inotify `MOVED_TO latest.json`; the service writes tmp + rename) and run
   upstream's `snapshot_from_statuses` on it with

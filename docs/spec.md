@@ -210,6 +210,21 @@ _Filled in during grilling, one entry per answered question._
   `custom`) at start and after every takeover. That also repairs a device
   left Manual by a crash mid-takeover. This one per-device value is the
   deliberate exception to "settings through upstream".
+  *Amended in #5:* the value is the device's **Display** (GLOSSARY.md) and
+  lives in the widget's shell.json entry as `deviceDisplays` (device id →
+  `agent` | `off`). The widget sends
+  the whole map to the helper on each helper hello and on each change
+  (`set-displays`); the helper reconciles every connected device to it on each
+  tick. Off writes upstream's `off` program once per helper, not on every tick.
+  Battery is not offered until #11 builds it, and then only on a machine with
+  a battery; a remembered value the helper does not offer (such as `battery`
+  without one) means Agent. Off is the user's saved choice, not a takeover: it
+  stays when the plugin is disabled or the helper exits (README says how to
+  undo it). While a device is Off the helper checks it every tick and writes
+  the off program again whenever the device shows anything else, because the
+  service can write an agent program it planned before reading `custom`
+  (`service.sync_outputs` reads settings, then writes). Brightness goes
+  through upstream's `with_device_brightness` (0-255; the widget sends percent).
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -229,6 +244,13 @@ _Filled in during grilling, one entry per answered question._
   (Working #00AEEF, Done #22B14C, Ask #FF8A00) so the icon matches the
   physical LED; Ask also sets `active` (urgent highlight). Tooltip: state,
   active count, top session.
+  *Amended in #5:* those are upstream's menu-bar legend colours, and the
+  device programs use others (Done is solid cyan #00E5FF on the device,
+  Working a cyan roll, Ask amber #FF3A00, Idle dim teal #006060), so the icon
+  did not match the LED. With a device connected and showing Agent, the icon
+  takes the colour its LEDs show now, read from the program on the device (a
+  SidePulse Pro wins, D21); the popup's device rows do the same. Without one,
+  the legend colours above apply.
 - **D13 Settings UI:** all inside the one popup — Sessions (top), Devices
   (per-device on/off, display mode, brightness), Keep awake (policy), and a
   collapsible Settings section (hooks per provider, Bar LEDs on/off, idle
@@ -237,6 +259,11 @@ _Filled in during grilling, one entry per answered question._
   settings.json (`virtual_status_device_enabled`, `sleep_prevention_policy`,
   `agent_list.*`, `devices[]`) via the helper, so they mean the same thing as
   on the Mac; only plugin-presentation settings go in the shell.json entry.
+  *Amended in #5:* upstream's `save_settings` rewrites settings.json from its
+  own model, so keys it models survive a change and keys it does not model
+  (a newer upstream's, hand-added ones) are dropped. The helper keeps that
+  behaviour, as upstream's own CLI does; it only refuses to save over a file
+  that is not a JSON object.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.
@@ -332,13 +359,13 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   stale_count, top session), `setup` (missing items in order, D19), `result`
   (outcome of a command), `error` (feature, message), `clear` (feature
   recovered; *amended in #10*),
-  `devices` (id, name, path, led_display, brightness, kind Dot/Pro, led count),
+  `devices` (*amended in #5*: id, name, path, product and kind Dot/Pro, LED
+  count, remembered Display, brightness percent; sent on change),
   `hooks` (doctor --json payload), `power` (battery %, plugged, lid),
   `awake` (holding bool, reason), `frame` (RGB per Bar LED),
   `log` (recent hook decision rows).
   Stdin commands: `refresh`, `start-service` (*amended in #10*: `setup` and
-  `result` are new), `set-device-enabled`, `set-brightness`, `set-display`,
-  `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
+  `result` are new), `set-displays`, `set-brightness`, `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
   `hooks-uninstall`, `open-session`. `open-session` answers with
   the D8 lookup state (stopped → resumed, live → focused or located,
   unresolved → explanation).

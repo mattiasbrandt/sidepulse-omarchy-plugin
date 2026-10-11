@@ -31,10 +31,27 @@ Panel {
   readonly property var setupRows: HelperProcess.notInstalled ? [installRow] : HelperProcess.setupItems
   readonly property bool needsSetup: setupRows.length > 0
 
-  // Idle is muted; the other three states use upstream's colours.
-  readonly property color glyphColour: !agentState || agentState.state === "idle" || agentState.state === "unavailable"
-    ? dim
-    : agentState.colour
+  // The colour a connected device's LEDs show now (a SidePulse Pro wins, D21);
+  // empty when none is lit. Upstream's device programs and its menu-bar legend
+  // differ (Done is cyan on the device, green in the legend), and the icon
+  // follows the device the user can see (D12).
+  readonly property string deviceColour: {
+    let found = ""
+    for (let i = 0; i < HelperProcess.devices.length; i++) {
+      const device = HelperProcess.devices[i]
+      if (!device.colour || displayOf(device.id) !== "agent") continue
+      if (device.kind === "pro") return device.colour
+      if (found === "") found = device.colour
+    }
+    return found
+  }
+
+  // Without a lit device: upstream's legend colours, Idle muted.
+  readonly property color glyphColour: deviceColour !== ""
+    ? deviceColour
+    : !agentState || agentState.state === "idle" || agentState.state === "unavailable"
+      ? dim
+      : agentState.colour
 
   readonly property string tooltipText: {
     if (HelperProcess.notInstalled) return "SidePulse: not installed"
@@ -64,7 +81,70 @@ Panel {
     return lines
   }
 
-  readonly property var sectionRows: ["sessions", "devices", "keep-awake", "settings"]
+  // The Display each device was last set to, keyed by device id (D9). Stored in
+  // this widget's shell.json entry; the helper re-derives upstream's value from it.
+  readonly property var deviceDisplays: setting("deviceDisplays", ({}))
+  readonly property var deviceRowNames: HelperProcess.devices.length > 0
+    ? HelperProcess.devices.map(function (device) { return "device:" + device.id })
+    : ["devices"]
+  readonly property var sectionRows: ["sessions"].concat(deviceRowNames, ["keep-awake", "settings"])
+  // Battery joins with #11, offered only where there is a battery.
+  readonly property var displayOrder: ["agent", "off"]
+  readonly property var displayChoices: [
+    { value: "agent", label: "Agent" },
+    { value: "off", label: "Off" }
+  ]
+
+  // The product drawn for the icon: Pro wins when both are plugged in (D21).
+  readonly property int iconLedCount: {
+    if (HelperProcess.devices.length === 0) return 1
+    for (let i = 0; i < HelperProcess.devices.length; i++) {
+      if (HelperProcess.devices[i].kind === "pro") return 8
+    }
+    return 2
+  }
+
+  // A value this version does not offer (none remembered, or a later Battery)
+  // means Agent, as the helper treats it.
+  function displayOf(deviceId) {
+    const value = deviceDisplays[deviceId]
+    return displayOrder.indexOf(value) >= 0 ? value : "agent"
+  }
+
+  function deviceById(deviceId) {
+    for (let i = 0; i < HelperProcess.devices.length; i++) {
+      if (HelperProcess.devices[i].id === deviceId) return HelperProcess.devices[i]
+    }
+    return null
+  }
+
+  // Writes the remembered displays into this widget's shell.json entry, keeping
+  // the rest of the entry as it is (the same way the Tailscale panel does).
+  function saveDeviceDisplays(displays) {
+    if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function") return
+    const entry = { id: root.moduleName }
+    for (const key in settings) if (key !== "id") entry[key] = settings[key]
+    entry.deviceDisplays = displays
+    bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function setDisplay(deviceId, display) {
+    const displays = Object.assign({}, deviceDisplays)
+    displays[deviceId] = display
+    saveDeviceDisplays(displays)
+    HelperProcess.setDisplays(displays)
+  }
+
+  function cycleDisplay(deviceId) {
+    const at = displayOrder.indexOf(displayOf(deviceId))
+    setDisplay(deviceId, displayOrder[(at + 1) % displayOrder.length])
+  }
+
+  function nudgeBrightness(deviceId, steps) {
+    const device = deviceById(deviceId)
+    if (!device) return
+    HelperProcess.setBrightness(deviceId, Math.max(0, Math.min(100, device.percent + 5 * steps)))
+  }
 
   // Keyboard cursor. Setup rows with an action come first, then the sections.
   property int cursorIndex: 0
@@ -105,6 +185,10 @@ Panel {
 
   function activateCursor() {
     const name = cursorRow
+    if (name.indexOf("device:") === 0) {
+      cycleDisplay(name.substring(7))
+      return
+    }
     if (name.indexOf("setup:") !== 0) return
     const id = name.substring(6)
     for (let i = 0; i < setupRows.length; i++) {
@@ -116,6 +200,17 @@ Panel {
     HelperProcess.pythonPath = pythonSetting
     HelperProcess.register()
   }
+
+  // A helper that has just started knows no displays yet: send what was remembered,
+  // and send again whenever the remembered map changes (also when edited in shell.json).
+  Connections {
+    target: HelperProcess
+    function onHelloReceivedChanged() {
+      if (HelperProcess.helloReceived) HelperProcess.setDisplays(root.deviceDisplays)
+    }
+  }
+
+  onDeviceDisplaysChanged: if (HelperProcess.helloReceived) HelperProcess.setDisplays(deviceDisplays)
   Component.onDestruction: HelperProcess.unregister()
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 
@@ -127,15 +222,20 @@ Panel {
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
   }
 
-  // Our own shapes (D22): a device outline with one LED. The setup look is the
-  // same glyph at half opacity with a dot in the urgent colour.
+  // Our own shapes (D22): a device outline with its LEDs (D21: one neutral LED
+  // with no device, 2 for a SidePulse Dot, 8 for a SidePulse Pro). The setup
+  // look is the same glyph at half opacity with a dot in the urgent colour.
   readonly property Component glyphComponent: Component {
     Item {
+      id: glyph
       opacity: root.needsSetup ? 0.5 : 1.0
+      readonly property real ledSize: Style.space(2)
+      readonly property real ledGap: Style.space(1)
+      readonly property real ledsWidth: root.iconLedCount * ledSize + (root.iconLedCount - 1) * ledGap
 
       Rectangle {
         anchors.centerIn: parent
-        width: Style.space(12)
+        width: Math.max(Style.space(12), glyph.ledsWidth + Style.space(4))
         height: Style.space(8)
         radius: height / 2
         color: "transparent"
@@ -143,12 +243,21 @@ Panel {
         border.color: root.glyphColour
       }
 
-      Rectangle {
+      Row {
         anchors.centerIn: parent
-        width: Style.space(3)
-        height: width
-        radius: width / 2
-        color: root.glyphColour
+        spacing: glyph.ledGap
+
+        Repeater {
+          model: root.iconLedCount
+
+          Rectangle {
+            required property int index
+            width: glyph.ledSize
+            height: width
+            radius: width / 2
+            color: root.glyphColour
+          }
+        }
       }
 
       Rectangle {
@@ -196,6 +305,7 @@ Panel {
       onMoveRequested: function (dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy)
+        else if (dx !== 0 && root.cursorRow.indexOf("device:") === 0) root.nudgeBrightness(root.cursorRow.substring(7), dx)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
       onCloseRequested: root.close()
@@ -289,9 +399,24 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            // Keyed on the count, not the list: each devices event replaces the
+            // list, and a list model would rebuild every row, ending a slider
+            // drag at its first step.
+            Repeater {
+              model: HelperProcess.devices.length
+
+              DeviceRow {
+                required property int index
+                width: parent.width
+                device: HelperProcess.devices[index] || ({})
+              }
+            }
+
             PlaceholderRow {
+              visible: HelperProcess.devices.length === 0
               width: parent.width
               rowName: "devices"
+              label: "No SidePulse device connected"
             }
           }
 
@@ -406,10 +531,157 @@ Panel {
     }
   }
 
+  // One connected device (D13, D21, D22): its product drawn with its LEDs, the
+  // Display (Agent / Off, D9) and brightness.
+  component DeviceRow: CursorSurface {
+    id: deviceRow
+    required property var device
+
+    readonly property string rowName: "device:" + device.id
+    readonly property string display: root.displayOf(device.id)
+    // The colour the device's own LEDs show now (the animation frames come with
+    // the Bar LEDs, #8); Off and dark programs leave them dim.
+    readonly property color ledColour: display === "agent" && device.colour
+      ? device.colour
+      : root.dim
+
+    hasCursor: root.rowHasCursor(rowName)
+    foreground: root.foreground
+    implicitHeight: deviceColumn.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      onEntered: root.focusRow(deviceRow.rowName)
+    }
+
+    Column {
+      id: deviceColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(6)
+
+      Row {
+        spacing: Style.space(10)
+
+        ProductArt {
+          anchors.verticalCenter: parent.verticalCenter
+          count: deviceRow.device.led_count
+          colour: deviceRow.ledColour
+        }
+
+        Column {
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(1)
+
+          Text {
+            textFormat: Text.PlainText
+            text: deviceRow.device.product
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            text: deviceRow.device.name
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: "Display"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+
+      ButtonGroup {
+        width: parent.width
+        options: root.displayChoices
+        value: deviceRow.display
+        focusable: false
+        onChanged: function (value) { root.setDisplay(deviceRow.device.id, value) }
+      }
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+
+        PanelSlider {
+          bar: root.bar
+          width: parent.width - brightnessText.width - Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          minimum: 0
+          maximum: 100
+          step: 5
+          integer: true
+          value: deviceRow.device.percent
+          onMoved: function (value) { HelperProcess.setBrightness(deviceRow.device.id, value) }
+        }
+
+        Text {
+          id: brightnessText
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: deviceRow.device.percent + "%"
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
+  }
+
+  // A device outline with one LED per light (the same shapes as the icon, D22).
+  component ProductArt: Item {
+    id: art
+    property int count: 2
+    property color colour: root.dim
+    readonly property real ledSize: Style.space(4)
+    readonly property real ledGap: Style.space(3)
+
+    width: Math.max(Style.space(24), count * ledSize + (count - 1) * ledGap + Style.space(10))
+    height: Style.space(12)
+
+    Rectangle {
+      anchors.fill: parent
+      radius: height / 2
+      color: "transparent"
+      border.width: Math.max(1, Style.space(1))
+      border.color: root.dim
+    }
+
+    Row {
+      anchors.centerIn: parent
+      spacing: art.ledGap
+
+      Repeater {
+        model: art.count
+
+        Rectangle {
+          required property int index
+          width: art.ledSize
+          height: width
+          radius: width / 2
+          color: art.colour
+        }
+      }
+    }
+  }
+
   // An empty section: one navigable row until its slice fills the section.
   component PlaceholderRow: CursorSurface {
     id: placeholder
     property string rowName: ""
+    property string label: "Nothing here yet."
 
     hasCursor: root.rowHasCursor(rowName)
     foreground: root.foreground
@@ -429,7 +701,7 @@ Panel {
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
       textFormat: Text.PlainText
-      text: "Nothing here yet."
+      text: placeholder.label
       color: root.dim
       font.family: root.fontFamily
       font.pixelSize: Style.font.bodySmall

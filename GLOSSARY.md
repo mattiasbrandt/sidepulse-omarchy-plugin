@@ -57,3 +57,9 @@ _Avoid_: Notch (for ours), band, virtual device, on-screen LEDs
 A device the agent State does not drive, so something else decides what it
 shows.
 _Avoid_: Custom (upstream's setting value for it), disconnected, off
+
+**Display**:
+What a device's LEDs show, chosen per device: Agent (the agent State),
+Battery (the battery level) or Off (dark). Battery and Off make the device
+Manual.
+_Avoid_: LED display, mode, led_display (upstream's setting name), Custom

@@ -39,6 +39,12 @@ def test_doctor_payload_lists_every_provider_and_finds_no_config_in_a_bare_home(
     assert claude["hooks_enabled"] is False
 
 
+def test_the_agent_list_is_upstreams_own_list_in_its_order(home):
+    from sidepulse.providers import HOOK_PROVIDERS
+
+    assert [row["provider"] for row in helper.hooks_event()["providers"]] == list(HOOK_PROVIDERS)
+
+
 def test_install_then_uninstall_claude_hooks_in_a_scratch_home(home):
     ok, message = helper.run_hook_command("install", "claude", helper.sys.executable)
     assert ok, message

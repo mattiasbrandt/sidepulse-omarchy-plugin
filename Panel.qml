@@ -89,7 +89,8 @@ Panel {
   // Settings (D13). The section is collapsed until opened; its rows exist only while open.
   property bool settingsOpen: false
   property string hookBusy: ""
-  readonly property var hookProviders: ["claude", "codex", "grok", "cursor", "junie"]
+  // The agents the helper lists, in its order (upstream's list, not a copy here).
+  readonly property var hookProviders: HelperProcess.hooks.map(function (entry) { return entry.provider })
   readonly property var settingRowNames: settingsOpen
     ? hookProviders.map(function (provider) { return "hook:" + provider })
       .concat(["bar-leds", "idle", "retention", "notify"])
@@ -609,18 +610,22 @@ Panel {
 
               SubHeading { text: "HOOKS" }
 
+              // One row per agent the helper lists (upstream's HOOK_PROVIDERS). Keyed on
+              // the count, so an event that replaces the list does not rebuild the rows.
               Repeater {
-                model: root.hookProviders
+                model: HelperProcess.hooks.length
 
                 SettingRow {
-                  required property var modelData
+                  required property int index
+                  readonly property var entry: HelperProcess.hooks[index] || ({})
                   width: parent.width
-                  rowName: "hook:" + modelData
-                  settingLabel: Settings.hookName(modelData)
-                  settingDetail: Settings.hookStatus(root.hookEntry(modelData))
-                  showSwitch: true
-                  checked: root.hookEntry(modelData) !== undefined && root.hookEntry(modelData).installed === true
-                  busy: root.hookBusy === modelData
+                  rowName: "hook:" + entry.provider
+                  settingLabel: Settings.hookName(entry.provider)
+                  settingDetail: Settings.hookStatus(entry)
+                  // An unreadable config has no switch: flipping it would act on a config we could not read.
+                  showSwitch: entry.error === undefined
+                  checked: entry.installed === true
+                  busy: root.hookBusy === entry.provider
                 }
               }
 

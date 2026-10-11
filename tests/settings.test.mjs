@@ -43,6 +43,8 @@ test("hook rows name the agent as GLOSSARY writes it, and say what the config ho
   assert.equal(Settings.hookName("claude"), "Claude Code")
   assert.equal(Settings.hookName("codex"), "Codex")
   assert.equal(Settings.hookName("junie"), "Junie")
+  // An agent upstream adds later shows under its own name, not dropped.
+  assert.equal(Settings.hookName("newagent"), "newagent")
   // "On" means SidePulse's own hooks are installed, not any hook (installed comes from the helper).
   assert.equal(Settings.hookStatus({ exists: true, hooks_enabled: true, installed: true }), "On")
   assert.equal(Settings.hookStatus({ exists: true, hooks_enabled: false, installed: false }), "Off")

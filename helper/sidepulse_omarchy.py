@@ -86,6 +86,10 @@ REQUIRED_NAMES = {
         "sidepulse.ipc": ("default_latest_state_path",),
         "sidepulse.settings": ("load_settings",),
     },
+    "sessions": {
+        "sidepulse.session_actions": ("session_resume_command",),
+        "sidepulse.models": ("AgentMode",),
+    },
     "service": {"sidepulse.service_launch": ("service_is_running",)},
     "devices": {
         "sidepulse.device_writer": ("discover_devices", "write_led_program"),
@@ -140,12 +144,6 @@ def _probe_wasmtime() -> dict[str, Any]:
     except ImportError:
         return {"ok": False, "reason": WASMTIME_REASON}
     return {"ok": True, "reason": ""}
-
-
-def idle_timeout_seconds() -> float:
-    from sidepulse.settings import load_settings
-
-    return load_settings().idle_timeout_seconds
 
 
 def snapshot_from_statuses(statuses: list[Any], *, now: datetime, idle_timeout_seconds: float) -> Any:
@@ -743,6 +741,70 @@ def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None =
     return {**found, **live_route(provider, session_id, cwd, found["pid"], proc, home, window_clients, run)}
 
 
+# --- The popup's session list (D13): upstream's recent-session rules -----------
+
+# Upstream's STATUS_BAR_SESSION_HISTORY_LIMIT (status_bar.py). tests/test_sessions.py
+# reads the upstream value and fails when it drifts.
+SESSION_LIMIT = 10
+
+
+def menu_status_sort_key(status: Any) -> tuple[int, int, float]:
+    subagent_penalty = 1 if ":agent:" in status.agent_id else 0
+    return (status.priority, subagent_penalty, -status.updated_at.timestamp())
+
+
+def recent_statuses(snapshot: Any, retention_seconds: float, limit: int = SESSION_LIMIT) -> list[Any]:
+    """Upstream's recent_statuses (status_bar.py): the fresh statuses and the completed
+    stale ones within retention, one per session, most urgent and newest first.
+
+    The menu-bar code cannot be imported on Linux, so the rules are copied here and
+    tests/test_sessions.py runs upstream's own functions against them.
+    """
+    from sidepulse.models import AgentMode
+
+    now = snapshot.collected_at
+    listed = list(snapshot.statuses)
+    listed.extend(
+        status for status in snapshot.stale_statuses
+        if status.mode == AgentMode.COMPLETED and status.age_seconds(now) <= retention_seconds
+    )
+    best: dict[tuple[str, ...], Any] = {}
+    passthrough: list[Any] = []
+    for status in listed:
+        if not status.session_id:
+            passthrough.append(status)
+            continue
+        key = ("session", status.provider.lower(), status.session_id)
+        previous = best.get(key)
+        if previous is None or menu_status_sort_key(status) < menu_status_sort_key(previous):
+            best[key] = status
+    ordered = [*best.values(), *passthrough]
+    ordered.sort(key=lambda status: (status.priority, -status.updated_at.timestamp()))
+    return ordered[:limit]
+
+
+def sessions_event(statuses: list[Any]) -> dict[str, Any]:
+    """The popup's Sessions rows. updated_ms lets the popup age them; the helper sends nothing per second."""
+    items = []
+    for status in statuses:
+        state = state_for_mode(status.mode.value)
+        items.append({
+            "provider": status.provider.lower(),
+            "session_id": status.session_id,
+            "agent_id": status.agent_id,
+            "name": status.display_name,
+            "project": Path(status.cwd).name if status.cwd else "",
+            "cwd": status.cwd,
+            "state": state,
+            "label": STATE_LABELS[state],
+            "colour": STATE_COLOURS[state],
+            "message": status.message or "",
+            "updated_ms": int(status.updated_at.timestamp() * 1000),
+            "resumable": bool(status.session_id),
+        })
+    return {"type": "sessions", "items": items}
+
+
 class Helper:
     def __init__(self, out: TextIO) -> None:
         self.out = out
@@ -752,6 +814,9 @@ class Helper:
         self.last_state: dict[str, Any] | None = None
         self.last_setup: dict[str, Any] | None = None
         self.last_devices: dict[str, Any] | None = None
+        self.last_sessions: dict[str, Any] | None = None
+        # The statuses the popup lists, from the last good read of latest.json (D19 rule: none while unreadable).
+        self.session_statuses: list[Any] = []
         self.devices: list[Device] = []
         self.device_count: int | None = None
         # The widget's remembered displays. None until it sends them: a fresh
@@ -802,11 +867,15 @@ class Helper:
     def refresh_state(self, force: bool = False) -> None:
         if self.latest_path is None:
             return
+        from sidepulse.settings import load_settings
+
+        statuses: list[Any] = []
         try:
+            settings = load_settings()
             snapshot = read_snapshot(
                 self.latest_path,
                 now=datetime.now(timezone.utc),
-                idle_timeout_seconds=idle_timeout_seconds(),
+                idle_timeout_seconds=settings.idle_timeout_seconds,
             )
         except (OSError, ValueError) as exc:
             message = f"cannot read {self.latest_path}: {exc}"
@@ -815,8 +884,18 @@ class Helper:
         else:
             self.resolve("state")
             event = state_event(snapshot)
+            if self.capabilities["sessions"]["ok"]:
+                statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
         if force or event != self.last_state:
             self.last_state = event
+            self.emit(event)
+        self.session_statuses = statuses
+        self.refresh_sessions(force)
+
+    def refresh_sessions(self, force: bool = False) -> None:
+        event = sessions_event(self.session_statuses)
+        if force or event != self.last_sessions:
+            self.last_sessions = event
             self.emit(event)
 
     def refresh_setup(self, force: bool = False) -> None:

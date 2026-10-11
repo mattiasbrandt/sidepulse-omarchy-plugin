@@ -128,6 +128,23 @@ def test_state_follows_latest_json_when_it_changes(helper_proc):
     assert event["active_count"] == 1
 
 
+def test_sessions_list_the_statuses_in_latest_json(helper_proc):
+    helper_proc.event_matching(lambda e: e["type"] == "sessions")
+    helper_proc.write_latest([status_row("working")])
+    event = helper_proc.event_matching(lambda e: e["type"] == "sessions" and e["items"])
+    [item] = event["items"]
+    assert (item["session_id"], item["project"], item["state"]) == ("abc", "demo", "working")
+    assert item["resumable"] is True
+
+
+def test_unreadable_latest_json_lists_no_sessions(helper_proc):
+    helper_proc.write_latest([status_row("working")])
+    helper_proc.event_matching(lambda e: e["type"] == "sessions" and e["items"])
+    (helper_proc.state_home / "sidepulse" / "agent-monitor" / "latest.json").write_text("{not json")
+    event = helper_proc.event_matching(lambda e: e["type"] == "sessions" and not e["items"])
+    assert event == {"type": "sessions", "items": []}
+
+
 def test_unknown_command_is_reported_as_an_error_event(helper_proc):
     helper_proc.event_matching(lambda e: e["type"] == "state")
     helper_proc.send({"cmd": "no-such-command"})

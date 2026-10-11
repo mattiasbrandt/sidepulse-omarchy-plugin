@@ -264,6 +264,32 @@ Panel {
     cursorIndex = at
   }
 
+  // Keeps a cursor row on screen, the way Omarchy's own panels do (dropbox Panel.qml).
+  function scrollItemIntoView(item) {
+    if (!panelFlick || !item) return
+    Qt.callLater(function () {
+      if (!item) return
+      const margin = Style.space(6)
+      const top = item.mapToItem(panelFlick.contentItem, 0, 0).y
+      const bottom = top + item.height
+      const maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+      if (top < panelFlick.contentY + margin) panelFlick.contentY = Math.max(0, top - margin)
+      else if (bottom > panelFlick.contentY + panelFlick.height - margin)
+        panelFlick.contentY = Math.min(maxY, bottom + margin - panelFlick.height)
+    })
+  }
+
+  // Opening Settings scrolls its header to the top, so the rows it reveals are on
+  // screen instead of below the fold.
+  function revealSettings() {
+    if (!panelFlick || !settingsHeader) return
+    Qt.callLater(function () {
+      const top = settingsHeader.mapToItem(panelFlick.contentItem, 0, 0).y - Style.space(6)
+      const maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+      panelFlick.contentY = Math.max(0, Math.min(maxY, top))
+    })
+  }
+
   function runSetupAction(row) {
     if (row.action) HelperProcess.send({ cmd: row.action })
   }
@@ -336,6 +362,8 @@ Panel {
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 
   // A result from an earlier open is stale once the popup opens again.
+  onSettingsOpenChanged: if (settingsOpen) revealSettings()
+
   onOpenedChanged: if (opened) {
     cursorActive = false
     cursorIndex = 0
@@ -600,6 +628,7 @@ Panel {
             }
 
             SettingsToggle {
+              id: settingsHeader
               width: parent.width
             }
 
@@ -693,6 +722,7 @@ Panel {
 
   component SetupRow: CursorSurface {
     id: setupRow
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(setupRow)
     required property var row
 
     readonly property bool actionable: row.action !== null && row.action !== undefined
@@ -758,6 +788,7 @@ Panel {
   // Enter or a click opens it (D8); a row without a session id only shows.
   component SessionRow: CursorSurface {
     id: sessionRow
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(sessionRow)
     required property var session
     required property int rowIndex
 
@@ -846,6 +877,7 @@ Panel {
   // Display (Agent / Off, D9) and brightness.
   component DeviceRow: CursorSurface {
     id: deviceRow
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(deviceRow)
     required property var device
 
     readonly property string rowName: "device:" + device.id
@@ -991,6 +1023,7 @@ Panel {
   // The Settings section's header: Enter or a click opens and shuts it (D13).
   component SettingsToggle: CursorSurface {
     id: settingsToggle
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(settingsToggle)
     readonly property string rowName: "settings"
 
     hasCursor: root.rowHasCursor(rowName)
@@ -1035,6 +1068,7 @@ Panel {
   // Enter or a click on the row does the change; the switch is drawn only.
   component SettingRow: CursorSurface {
     id: settingRow
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(settingRow)
     required property string rowName
     property string settingLabel: ""
     property string settingDetail: ""
@@ -1188,6 +1222,7 @@ Panel {
   // An empty section: one navigable row until its slice fills the section.
   component PlaceholderRow: CursorSurface {
     id: placeholder
+    onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(placeholder)
     property string rowName: ""
     property string label: "Nothing here yet."
 

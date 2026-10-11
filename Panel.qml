@@ -6,11 +6,12 @@ import qs.Commons
 import qs.Ui
 import "helper"
 import "helper/sessions.mjs" as Sessions
+import "helper/settings.mjs" as Settings
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
-// popup is the section frame (D18): Setup lists what is missing (D19), and the
-// four sections below are empty until their slices fill them.
+// popup holds Setup (D19), Sessions, Devices, Keep awake (still a placeholder
+// until #7) and the collapsible Settings section (D13).
 Panel {
   id: root
 
@@ -70,16 +71,75 @@ Panel {
     return agentState.label + (agentState.active_count > 0 ? " · " + agentState.active_count + " active" : "")
   }
 
-  // Problems the helper reported, one line each: capabilities that are off and failures.
+  // Problems the helper reported, one per feature: capabilities that are off and
+  // failures (D14). Each is a title and the reason, so the reason reads as a problem.
   readonly property var problemLines: {
     const lines = []
     const keys = Object.keys(HelperProcess.errors)
-    for (let i = 0; i < keys.length; i++) lines.push(keys[i] + ": " + HelperProcess.errors[keys[i]])
+    for (let i = 0; i < keys.length; i++) {
+      lines.push({ title: Settings.problemTitle(keys[i]), message: HelperProcess.errors[keys[i]] })
+    }
     // A helper that died before saying hello only leaves its last stderr line.
     if (!HelperProcess.helloReceived && !HelperProcess.notInstalled && HelperProcess.lastStderr !== "") {
-      lines.push("helper: " + HelperProcess.lastStderr)
+      lines.push({ title: Settings.problemTitle("helper"), message: HelperProcess.lastStderr })
     }
     return lines
+  }
+
+  // Settings (D13). The section is collapsed until opened; its rows exist only while open.
+  property bool settingsOpen: false
+  property string hookBusy: ""
+  readonly property var hookProviders: ["claude", "codex", "grok", "cursor", "junie"]
+  readonly property var settingRowNames: settingsOpen
+    ? hookProviders.map(function (provider) { return "hook:" + provider })
+      .concat(["bar-leds", "idle", "retention", "notify"])
+    : []
+  // Upstream's values, as the helper last reported them; empty until the first report.
+  readonly property bool barLedsOn: HelperProcess.settings !== null && HelperProcess.settings.bar_leds === true
+  readonly property string barLedsDetail: {
+    const cap = HelperProcess.capabilities ? HelperProcess.capabilities.bar_leds : undefined
+    if (cap && cap.ok === false) return "Unavailable until the problem above is fixed."
+    return "SidePulse's setting. Drawing the LEDs on the bar is not in this version."
+  }
+  readonly property real idleSeconds: HelperProcess.settings !== null ? HelperProcess.settings.idle_timeout_seconds : 0
+  readonly property real retentionSeconds: HelperProcess.settings !== null
+    ? HelperProcess.settings.recent_session_retention_seconds : 0
+  readonly property bool notifyOnAsk: setting("notifyOnAsk", false)
+
+  function hookEntry(provider) {
+    for (let i = 0; i < HelperProcess.hooks.length; i++) {
+      if (HelperProcess.hooks[i].provider === provider) return HelperProcess.hooks[i]
+    }
+    return undefined
+  }
+
+  function toggleHook(provider) {
+    if (hookBusy !== "") return
+    const entry = hookEntry(provider)
+    hookBusy = provider
+    if (entry && entry.hooks_enabled) HelperProcess.uninstallHooks(provider)
+    else HelperProcess.installHooks(provider)
+  }
+
+  function toggleBarLeds() {
+    HelperProcess.setBarLeds(!barLedsOn)
+  }
+
+  // Steps the idle timeout or the retention to the next preset in direction dx.
+  function stepTiming(rowName, dx) {
+    if (HelperProcess.settings === null) return
+    if (rowName === "idle") {
+      HelperProcess.setAgentList({ idle_timeout_seconds: Settings.nextPreset(Settings.IDLE_PRESETS, idleSeconds, dx) })
+    } else if (rowName === "retention") {
+      HelperProcess.setAgentList({
+        recent_session_retention_seconds: Settings.nextPreset(Settings.RETENTION_PRESETS, retentionSeconds, dx)
+      })
+    }
+  }
+
+  function toggleNotify() {
+    saveEntry("notifyOnAsk", !notifyOnAsk)
+    HelperProcess.setNotify(!notifyOnAsk)
   }
 
   // The Display each device was last set to, keyed by device id (D9). Stored in
@@ -92,7 +152,7 @@ Panel {
   readonly property var sessionRowNames: HelperProcess.sessions.length > 0
     ? HelperProcess.sessions.map(function (session, index) { return Sessions.sessionRow(index) })
     : ["sessions"]
-  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["keep-awake", "settings"])
+  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["keep-awake", "settings"], settingRowNames)
   // Battery joins with #11, offered only where there is a battery.
   readonly property var displayOrder: ["agent", "off"]
   readonly property var displayChoices: [
@@ -139,20 +199,21 @@ Panel {
     return null
   }
 
-  // Writes the remembered displays into this widget's shell.json entry, keeping
-  // the rest of the entry as it is (the same way the Tailscale panel does).
-  function saveDeviceDisplays(displays) {
+  // Writes one key into this widget's shell.json entry, keeping the rest of the
+  // entry as it is (the same way the Tailscale panel does). Only presentation
+  // settings go here (D13): device displays and the Ask notice.
+  function saveEntry(key, value) {
     if (!bar || !bar.shell || typeof bar.shell.updateEntryInline !== "function") return
     const entry = { id: root.moduleName }
-    for (const key in settings) if (key !== "id") entry[key] = settings[key]
-    entry.deviceDisplays = displays
+    for (const name in settings) if (name !== "id") entry[name] = settings[name]
+    entry[key] = value
     bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
   function setDisplay(deviceId, display) {
     const displays = Object.assign({}, deviceDisplays)
     displays[deviceId] = display
-    saveDeviceDisplays(displays)
+    saveEntry("deviceDisplays", displays)
     HelperProcess.setDisplays(displays)
   }
 
@@ -204,21 +265,38 @@ Panel {
     if (row.action) HelperProcess.send({ cmd: row.action })
   }
 
-  function activateCursor() {
-    const name = cursorRow
+  // Enter, or a click, on the row with this cursor name.
+  function activateRow(name) {
     if (name.indexOf("session:") === 0) {
       openSession(parseInt(name.substring(8), 10))
-      return
-    }
-    if (name.indexOf("device:") === 0) {
+    } else if (name.indexOf("device:") === 0) {
       cycleDisplay(name.substring(7))
-      return
+    } else if (name.indexOf("setup:") === 0) {
+      const id = name.substring(6)
+      for (let i = 0; i < setupRows.length; i++) {
+        if (setupRows[i].id === id) runSetupAction(setupRows[i])
+      }
+    } else if (name === "settings") {
+      settingsOpen = !settingsOpen
+    } else if (name.indexOf("hook:") === 0) {
+      toggleHook(name.substring(5))
+    } else if (name === "bar-leds") {
+      toggleBarLeds()
+    } else if (name === "idle" || name === "retention") {
+      stepTiming(name, 1)
+    } else if (name === "notify") {
+      toggleNotify()
     }
-    if (name.indexOf("setup:") !== 0) return
-    const id = name.substring(6)
-    for (let i = 0; i < setupRows.length; i++) {
-      if (setupRows[i].id === id) runSetupAction(setupRows[i])
-    }
+  }
+
+  function activateCursor() {
+    activateRow(cursorRow)
+  }
+
+  // Left and right on a row step its value: a device's brightness or a timeout.
+  function stepRow(name, dx) {
+    if (name.indexOf("device:") === 0) nudgeBrightness(name.substring(7), dx)
+    else if (name === "idle" || name === "retention") stepTiming(name, dx)
   }
 
   Component.onCompleted: {
@@ -226,22 +304,28 @@ Panel {
     HelperProcess.register()
   }
 
-  // A helper that has just started knows no displays yet: send what was remembered,
-  // and send again whenever the remembered map changes (also when edited in shell.json).
+  // A helper that has just started knows no displays or notice setting yet: send
+  // what was remembered, and send again whenever the remembered values change
+  // (also when edited in shell.json).
   Connections {
     target: HelperProcess
     function onHelloReceivedChanged() {
-      if (HelperProcess.helloReceived) HelperProcess.setDisplays(root.deviceDisplays)
+      if (!HelperProcess.helloReceived) return
+      HelperProcess.setDisplays(root.deviceDisplays)
+      HelperProcess.setNotify(root.notifyOnAsk)
     }
   }
 
   onDeviceDisplaysChanged: if (HelperProcess.helloReceived) HelperProcess.setDisplays(deviceDisplays)
+  onNotifyOnAskChanged: if (HelperProcess.helloReceived) HelperProcess.setNotify(notifyOnAsk)
   // Focusing or resuming a session closes the popup; a failure stays on show with its reason.
+  // A hook command's answer ends its busy switch, whatever it says (the hooks event shows the truth).
   Connections {
     target: HelperProcess
     function onLastResultChanged() {
       const result = HelperProcess.lastResult
       if (result && result.command === "open-session" && result.ok === true) root.close()
+      if (result && String(result.command).indexOf("hooks-") === 0) root.hookBusy = ""
     }
   }
 
@@ -254,6 +338,7 @@ Panel {
     cursorIndex = 0
     nowMs = Date.now()
     HelperProcess.lastResult = null
+    hookBusy = ""
     if (panelFlick) panelFlick.contentY = 0
     HelperProcess.refresh()
     Qt.callLater(function () { keyCatcher.forceActiveFocus() })
@@ -342,7 +427,7 @@ Panel {
       onMoveRequested: function (dx, dy) {
         if (!root.cursorActive) { root.cursorActive = true; return }
         if (dy !== 0) root.moveCursor(dy)
-        else if (dx !== 0 && root.cursorRow.indexOf("device:") === 0) root.nudgeBrightness(root.cursorRow.substring(7), dx)
+        else if (dx !== 0) root.stepRow(root.cursorRow, dx)
       }
       onActivateRequested: if (root.cursorActive) root.activateCursor()
       onCloseRequested: root.close()
@@ -491,30 +576,107 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
-            PanelSectionHeader {
-              text: "SETTINGS"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
+            // Problems stay on show when the section is collapsed: a capability
+            // that is off must not hide behind a closed header (D14).
+            Column {
+              visible: root.problemLines.length > 0
+              width: parent.width
+              spacing: Style.space(6)
 
-            Repeater {
-              model: root.problemLines
+              SubHeading { text: "PROBLEMS" }
 
-              Text {
-                required property var modelData
-                textFormat: Text.PlainText
-                width: parent.width
-                text: modelData
-                color: root.urgent
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                wrapMode: Text.WordWrap
+              Repeater {
+                model: root.problemLines.length
+
+                ProblemRow {
+                  required property int index
+                  width: parent.width
+                  problem: root.problemLines[index] || ({})
+                }
               }
             }
 
-            PlaceholderRow {
+            SettingsToggle {
               width: parent.width
-              rowName: "settings"
+            }
+
+            Column {
+              visible: root.settingsOpen
+              width: parent.width
+              spacing: Style.space(6)
+
+              SubHeading { text: "HOOKS" }
+
+              Repeater {
+                model: root.hookProviders
+
+                SettingRow {
+                  required property var modelData
+                  width: parent.width
+                  rowName: "hook:" + modelData
+                  settingLabel: Settings.hookName(modelData)
+                  settingDetail: Settings.hookStatus(root.hookEntry(modelData))
+                  showSwitch: true
+                  checked: root.hookEntry(modelData) !== undefined && root.hookEntry(modelData).hooks_enabled === true
+                  busy: root.hookBusy === modelData
+                }
+              }
+
+              SettingRow {
+                width: parent.width
+                rowName: "bar-leds"
+                settingLabel: "Bar LEDs"
+                settingDetail: root.barLedsDetail
+                showSwitch: true
+                checked: root.barLedsOn
+              }
+
+              SettingRow {
+                width: parent.width
+                rowName: "idle"
+                settingLabel: "Idle timeout"
+                settingDetail: "A session with no hook for this long goes stale."
+                settingValue: HelperProcess.settings !== null ? Settings.durationLabel(root.idleSeconds) : ""
+              }
+
+              SettingRow {
+                width: parent.width
+                rowName: "retention"
+                settingLabel: "Keep finished sessions"
+                settingDetail: "Done sessions stay in the list for this long."
+                settingValue: HelperProcess.settings !== null ? Settings.durationLabel(root.retentionSeconds) : ""
+              }
+
+              SettingRow {
+                width: parent.width
+                rowName: "notify"
+                settingLabel: "Notify when a session asks"
+                settingDetail: "Off by default. Clicking the notice opens the session."
+                showSwitch: true
+                checked: root.notifyOnAsk
+              }
+
+              SubHeading { text: "HOOK LOG" }
+
+              Repeater {
+                model: HelperProcess.hookLog.length
+
+                LogRow {
+                  required property int index
+                  width: parent.width
+                  entry: HelperProcess.hookLog[index] || ({})
+                }
+              }
+
+              Text {
+                visible: HelperProcess.hookLog.length === 0
+                width: parent.width
+                textFormat: Text.PlainText
+                text: "No hook decisions yet."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
             }
           }
         }
@@ -814,6 +976,203 @@ Panel {
         }
       }
     }
+  }
+
+  // The Settings section's header: Enter or a click opens and shuts it (D13).
+  component SettingsToggle: CursorSurface {
+    id: settingsToggle
+    readonly property string rowName: "settings"
+
+    hasCursor: root.rowHasCursor(rowName)
+    foreground: root.foreground
+    implicitHeight: toggleRow.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: root.focusRow(settingsToggle.rowName)
+      onClicked: root.activateRow(settingsToggle.rowName)
+    }
+
+    Row {
+      id: toggleRow
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(8)
+
+      PanelSectionHeader {
+        text: "SETTINGS"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+      }
+
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
+        text: root.settingsOpen ? "Hide" : "Show"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+  }
+
+  // One setting: its label, what it says now, and a switch or a value (D13).
+  // Enter or a click on the row does the change; the switch is drawn only.
+  component SettingRow: CursorSurface {
+    id: settingRow
+    required property string rowName
+    property string settingLabel: ""
+    property string settingDetail: ""
+    property string settingValue: ""
+    property bool showSwitch: false
+    property bool checked: false
+    property bool busy: false
+
+    hasCursor: root.rowHasCursor(rowName)
+    foreground: root.foreground
+    implicitHeight: settingColumn.implicitHeight + Style.spacing.rowPaddingX
+
+    MouseArea {
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onEntered: root.focusRow(settingRow.rowName)
+      onClicked: root.activateRow(settingRow.rowName)
+    }
+
+    Column {
+      id: settingColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.space(2)
+
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+
+        Text {
+          textFormat: Text.PlainText
+          width: Math.max(0, parent.width - valueLabel.implicitWidth
+            - (switchItem.visible ? switchItem.width : 0) - Style.space(16))
+          text: settingRow.settingLabel
+          elide: Text.ElideRight
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          id: valueLabel
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: settingRow.settingValue
+          color: root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        ToggleSwitch {
+          id: switchItem
+          visible: settingRow.showSwitch
+          anchors.verticalCenter: parent.verticalCenter
+          checked: settingRow.checked
+          busy: settingRow.busy
+          interactive: false
+          hasCursor: settingRow.hasCursor
+          foreground: root.foreground
+        }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        visible: text !== ""
+        width: parent.width
+        text: settingRow.settingDetail
+        wrapMode: Text.WordWrap
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
+    }
+  }
+
+  // A problem the helper reported: the feature in the urgent colour, then the reason (D14).
+  component ProblemRow: Column {
+    id: problemRow
+    required property var problem
+    spacing: Style.space(1)
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      text: problemRow.problem.title || ""
+      color: root.urgent
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.bodySmall
+      font.bold: true
+      wrapMode: Text.WordWrap
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: parent.width
+      text: problemRow.problem.message || ""
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.WordWrap
+    }
+  }
+
+  // One hook decision (D13): when, which agent and event, and the State it became.
+  component LogRow: Row {
+    id: logRow
+    required property var entry
+    readonly property var line: Settings.logText(entry)
+    spacing: Style.space(8)
+
+    Text {
+      id: logTime
+      textFormat: Text.PlainText
+      text: logRow.line.time
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      width: Math.max(0, logRow.width - logTime.implicitWidth - stateText.implicitWidth - Style.space(24))
+      text: logRow.line.what
+      elide: Text.ElideRight
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+
+    Text {
+      id: stateText
+      textFormat: Text.PlainText
+      text: logRow.line.state
+      color: logRow.entry.colour ? logRow.entry.colour : root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+  }
+
+  component SubHeading: Text {
+    textFormat: Text.PlainText
+    color: root.dim
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
   }
 
   // An empty section: one navigable row until its slice fills the section.

@@ -2,12 +2,14 @@
 # Live check: run the working tree in the bar's center section, then put the
 # bar back exactly as it was (AGENTS.md).
 #
-# Usage: scripts/live-check.sh up | sync | down
-#   up    back up shell.json, install the working tree, enable it in the
-#         center section, restart the shell, wait for exactly one helper
-#   sync  install the working tree again and restart the shell
-#   down  disable and remove the plugin, restore shell.json from the backup if
-#         it still differs, wait for the helper to stop
+# Usage: scripts/live-check.sh up | sync | position <top|bottom|left|right> | down
+#   up        back up shell.json, install the working tree, enable it in the
+#             center section, restart the shell, wait for exactly one helper
+#   sync      install the working tree again and restart the shell
+#   position  put the bar at that edge (omarchy bar position), restart the
+#             shell, wait for exactly one helper; down puts the bar back
+#   down      disable and remove the plugin, restore shell.json from the backup if
+#             it still differs, wait for the helper to stop
 #
 # A plugin already installed (a release you run day to day) is never touched:
 # up refuses, since down removes the directory it installed.
@@ -101,6 +103,18 @@ sync)
   wait_helpers 1
   echo "live-check.sh: synced; helper $(helpers)"
   ;;
+position)
+  [ -e "$backup" ] || die "no check is running; run up first"
+  case ${2:-} in
+  top | bottom | left | right) ;;
+  *) die "usage: scripts/live-check.sh position top|bottom|left|right" ;;
+  esac
+  # Edits the bar's position in shell.json; down restores the backup, so the bar comes back as it was.
+  omarchy bar position "$2" >/dev/null || die "omarchy bar position $2 failed; run down to restore the bar"
+  restart_shell
+  wait_helpers 1
+  echo "live-check.sh: bar at $2; helper $(helpers)"
+  ;;
 down)
   [ -e "$backup" ] || die "no check is running ($backup is missing)"
   # Carry on when disable fails: the backup is restored below.
@@ -120,6 +134,6 @@ down)
   echo "live-check.sh: down; bar restored, sidepulse.service $(systemctl --user is-active sidepulse.service || true)"
   ;;
 *)
-  die "usage: scripts/live-check.sh up | sync | down"
+  die "usage: scripts/live-check.sh up | sync | position <top|bottom|left|right> | down"
   ;;
 esac

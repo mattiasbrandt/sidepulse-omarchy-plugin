@@ -404,6 +404,7 @@ _Filled in during grilling, one entry per answered question._
   apply to them: they follow the State even when a device is Off. Each device row
   plays the program its device holds (`LEDS.LED`) through its own engine at the
   device's LED count, so an Off device shows dark and a Pro shows its own frames.
+  Those frames flow only while a popup is open (the `set-popup` gate, below).
   The device's file is read on each tick, so a change of program reaches the row
   within a second; its animation frames run live.
 - **D22 Own artwork (plan review):** product drawings are our own vector
@@ -438,6 +439,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   ├── sessions.mjs     the Sessions rows' age, provider label and cursor name (*added in #4*)
 │   ├── settings.mjs     the Settings section's presets, hook and log wording (*added in #6*)
 │   ├── barleds.mjs      the Bar LEDs' blend and tone map, upstream's constants (*added in #8*)
+│   ├── popup.mjs        which widget copies have their popup open: set-popup's OR (*added in #8*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
@@ -532,6 +534,12 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   a full tick. A program that does not parse is reported as `error` with feature
   `frames` (PROBLEMS: "LED programs") and plays dark; `clear` follows when it is
   fixed. `set-bar-leds` answers with `settings` and the next frame.
+  *Amended in #8 (popup gate):* device frames are sent only while a popup is
+  open. The widget sends `set-popup` (`open`: true or false) with the OR of its
+  copies' popups (`helper/popup.mjs`): on each change, and again after each hello,
+  since a fresh helper starts closed. While closed no device engine steps and no
+  device frame is sent; the bar frames are unaffected. On open, the device frames
+  are sent at the next pump, not suppressed as unchanged.
 
 ### Widget behaviour
 

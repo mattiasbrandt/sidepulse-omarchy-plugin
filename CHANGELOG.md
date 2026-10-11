@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.1...v0.9.2) (2026-10-11)
+
+
+### Bug Fixes
+
+* **helper:** leave finished sessions in deleted folders out of the list ([#48](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/48)) ([3100796](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/31007965a8d003112878a1a1c2f7cf46627419a0))
+
 ## [0.9.1](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.0...v0.9.1) (2026-10-11)
 
 

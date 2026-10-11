@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.2.0...v0.3.0) (2026-10-11)
+
+
+### Features
+
+* **widget:** control SidePulse devices from the popup ([#30](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/30)) ([1f4219b](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/1f4219ba3a0622f034cb64d5507a7ca508747322))
+
 ## [0.2.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.1.0...v0.2.0) (2026-10-11)
 
 

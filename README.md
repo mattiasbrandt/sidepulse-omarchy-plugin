@@ -66,8 +66,10 @@ afterwards set its `led_display` back to `agent` in
 - `xdg-terminal-exec` (your default terminal) to resume a stopped session, and
   `hyprctl`, which Omarchy ships, to raise a session's window. Optional: `herdr`
   or `tmux`, when your agents run inside one.
+- `systemd-inhibit` (systemd, which Omarchy ships) for keep-awake (D11). Without
+  it the Keep awake policy cannot hold sleep and the popup says why.
 - Later slices add their own requirements here: `wasmtime` in the SidePulse
-  venv for the Bar LEDs (#8) and `systemd-inhibit` for keep-awake (#7).
+  venv for the Bar LEDs (#8).
 
 ## Remove
 
@@ -107,7 +109,14 @@ Plugins run unsandboxed inside `omarchy-shell`. The plugin:
   LEDs switch) through SidePulse's own settings code;
 - runs `notify-send` (libnotify) for each notice when a session asks, only
   while "Notify when a session asks" is on, and opens the session when you click
-  the notice.
+  the notice;
+- holds a sleep lock while the Keep awake policy says so: it runs
+  `systemd-inhibit --what=sleep:handle-lid-switch --mode=block` (a `cat` child
+  that ends with the helper), so the machine does not suspend or sleep on lid
+  close. Screen lock and idle are not blocked, and no idle setting changes. It
+  reads the battery from `/sys/class/power_supply` to release the lock when it
+  is unplugged and below SidePulse's threshold (20 % by default), and saves the
+  policy in SidePulse's `settings.json` (`sleep_prevention_policy`).
 
 It makes no network calls and needs no sudo. The list grows with each feature
 and is complete at #12.

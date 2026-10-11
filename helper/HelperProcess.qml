@@ -3,11 +3,12 @@ pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "lifecycle.mjs" as Lifecycle
 
 // The one helper process for the whole shell (D5). Each widget copy registers
-// on creation and unregisters on destruction. The helper runs while a copy is
-// registered and stops once the count has stayed at zero for stopDebounceMs,
-// so a plugin reload (down to zero and back) keeps the same process.
+// on creation and unregisters on destruction. When the process starts, stops
+// and restarts is decided in lifecycle.mjs (tested under node); this file
+// applies its actions to the Process and the Timers.
 //
 // This file owns the process, parses the NDJSON lines and exposes the latest
 // event of each kind. Logic lives in sidepulse_omarchy.py beside it. Edits here
@@ -18,9 +19,6 @@ Item {
   // Holds the Timers and the Process below; an Item takes children, a QtObject does not.
   visible: false
 
-  readonly property int stopDebounceMs: 1500
-  readonly property int restartMinMs: 1000
-  readonly property int restartMaxMs: 30000
   readonly property string notInstalledMarker: "SIDEPULSE_NOT_INSTALLED"
 
   // Empty means SidePulse's own venv, the one the official installer makes.
@@ -31,8 +29,8 @@ Item {
   readonly property string helperPath: decodeURIComponent(
     Qt.resolvedUrl("sidepulse_omarchy.py").toString().replace("file://", ""))
 
-  property int refs: 0
-  property int backoffMs: restartMinMs
+  // Registered copies and the next restart delay (lifecycle.mjs owns both).
+  property var life: Lifecycle.initial()
 
   // Latest events. `state` and `setupItems` are replaced whole on each event.
   property bool helloReceived: false
@@ -45,35 +43,37 @@ Item {
 
   function register(pythonOverride) {
     if (pythonOverride !== undefined && pythonOverride !== null) pythonPath = pythonOverride
-    refs += 1
-    stopTimer.stop()
-    ensureRunning()
+    apply(Lifecycle.register(life, proc.running))
   }
 
   function unregister() {
-    refs = Math.max(0, refs - 1)
-    if (refs === 0) {
-      // A restart still waiting out its backoff would outlive the last copy.
-      restartTimer.stop()
-      stopTimer.restart()
+    apply(Lifecycle.unregister(life))
+  }
+
+  function apply(step) {
+    life = step.state
+    for (const action of step.actions) {
+      if (action.type === "start") proc.running = true
+      else if (action.type === "stop") proc.running = false
+      else if (action.type === "scheduleStop") {
+        stopTimer.interval = action.ms
+        stopTimer.restart()
+      } else if (action.type === "cancelStop") stopTimer.stop()
+      else if (action.type === "scheduleRestart") {
+        restartTimer.interval = action.ms
+        restartTimer.restart()
+      } else if (action.type === "cancelRestart") restartTimer.stop()
+      else console.warn("HelperProcess: unknown lifecycle action", action.type)
     }
   }
 
-  function ensureRunning() {
-    if (refs > 0 && !proc.running) proc.running = true
-  }
-
-  // The helper ended. Registered copies mean it died on its own: restart after
-  // a backoff that doubles up to restartMaxMs and resets on the next hello.
+  // The helper ended, stopped or crashed: drop what it said, then let the
+  // lifecycle decide whether to restart it.
   function processEnded() {
     helloReceived = false
     agentState = null
     errors = {}  // the next helper re-reports what still fails
-    if (refs > 0) {
-      restartTimer.interval = backoffMs
-      backoffMs = Math.min(backoffMs * 2, restartMaxMs)
-      restartTimer.restart()
-    }
+    apply(Lifecycle.processEnded(life))
   }
 
   function send(command) {
@@ -94,7 +94,7 @@ Item {
     }
     if (event.type === "hello") {
       helloReceived = true
-      backoffMs = restartMinMs
+      apply(Lifecycle.hello(life))
     } else if (event.type === "state") {
       agentState = event
     } else if (event.type === "setup") {
@@ -110,16 +110,15 @@ Item {
     }
   }
 
+  // Both intervals are set by the action that schedules them.
   Timer {
     id: stopTimer
-    interval: root.stopDebounceMs
-    onTriggered: proc.running = false
+    onTriggered: root.apply(Lifecycle.stopDue(root.life, proc.running))
   }
 
-  // Set to backoffMs when scheduled; doubles after each unexpected exit.
   Timer {
     id: restartTimer
-    onTriggered: root.ensureRunning()
+    onTriggered: root.apply(Lifecycle.restartDue(root.life, proc.running))
   }
 
   // The shell prints a marker instead of starting the helper when the venv's
@@ -149,7 +148,7 @@ Item {
 
     onStarted: root.notInstalled = false
 
-    // Both a stop (no copies left) and a crash end here; processEnded restarts
+    // Both a stop (no copies left) and a crash end here; the lifecycle restarts
     // only while copies are registered.
     onRunningChanged: if (!running) root.processEnded()
   }

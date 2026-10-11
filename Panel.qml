@@ -280,14 +280,25 @@ Panel {
   }
 
   // Opening Settings scrolls its header to the top, so the rows it reveals are on
-  // screen instead of below the fold.
+  // screen instead of below the fold. The rows and the popup's own height grow
+  // after settingsOpen flips, so the scroll is applied again on each change of
+  // either until revealTimer ends it (or the user scrolls).
+  property bool revealPending: false
+
   function revealSettings() {
-    if (!panelFlick || !settingsHeader) return
-    Qt.callLater(function () {
-      const top = settingsHeader.mapToItem(panelFlick.contentItem, 0, 0).y - Style.space(6)
-      const maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
-      panelFlick.contentY = Math.max(0, Math.min(maxY, top))
-    })
+    if (!revealPending || !panelFlick || !settingsHeader) return
+    const top = settingsHeader.mapToItem(panelFlick.contentItem, 0, 0).y - Style.space(6)
+    const maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+    panelFlick.contentY = Math.max(0, Math.min(maxY, top))
+  }
+
+  Timer {
+    id: revealTimer
+    interval: 400
+    onTriggered: {
+      root.revealSettings()
+      root.revealPending = false
+    }
   }
 
   function runSetupAction(row) {
@@ -362,7 +373,13 @@ Panel {
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 
   // A result from an earlier open is stale once the popup opens again.
-  onSettingsOpenChanged: if (settingsOpen) revealSettings()
+  onSettingsOpenChanged: {
+    revealPending = settingsOpen
+    if (settingsOpen) {
+      revealTimer.restart()
+      Qt.callLater(revealSettings)
+    }
+  }
 
   onOpenedChanged: if (opened) {
     cursorActive = false
@@ -476,6 +493,9 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
+        onContentHeightChanged: root.revealSettings()
+        onHeightChanged: root.revealSettings()
+        onMovementStarted: root.revealPending = false
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
         Column {

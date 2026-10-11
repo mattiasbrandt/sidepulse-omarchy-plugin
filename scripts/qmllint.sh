@@ -35,5 +35,20 @@ ln -s "$(realpath "$shell_dir")" "$root/qs"
 
 qmldir_args=()
 for qmldir in "${qmldirs[@]}"; do qmldir_args+=(-i "$qmldir"); done
-"$qmllint" --max-warnings 0 -I "$root" "${qmldir_args[@]}" "${files[@]}"
+args=(-I "$root" "${qmldir_args[@]}" "${files[@]}")
+if ! "$qmllint" --max-warnings 0 "${args[@]}"; then
+  # The text output can leave out a warning that --max-warnings still counts
+  # (Qt 6.12's block-scope-var-declaration exited 255 with nothing printed).
+  # The JSON report lists every one, so print those before failing.
+  echo "qmllint.sh: qmllint failed; every warning it counted:" >&2
+  "$qmllint" --json - "${args[@]}" | python3 -c '
+import json, sys
+for f in json.load(sys.stdin)["files"]:
+    for w in f["warnings"]:
+        if w.get("type") != "info":
+            rule = w.get("id") or w.get("type")
+            print("%s:%s: [%s] %s" % (f["filename"], w.get("line", "?"), rule, w["message"].splitlines()[0]))
+' >&2 || echo "qmllint.sh: could not read qmllint's JSON report" >&2
+  exit 1
+fi
 echo "qmllint.sh: ${#files[@]} file(s) clean"

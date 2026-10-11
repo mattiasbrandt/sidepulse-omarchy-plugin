@@ -96,7 +96,7 @@ jobs:
     container: archlinux:base@sha256:4e77cf2ea5f410e6f8be5abf93ccf17ce2436e87a138c167208356711a405dbd
     steps:
       - name: Install Qt and Quickshell
-        run: pacman -Syu --noconfirm --needed git qt6-declarative quickshell
+        run: pacman -Syu --noconfirm --needed git python qt6-declarative quickshell
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

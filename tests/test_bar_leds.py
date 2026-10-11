@@ -421,7 +421,7 @@ def test_opening_the_popup_sends_the_device_frames_at_once(scratch):
     assert len(device[0]["leds"]) == 2
 
 
-def test_closing_the_popup_stops_device_frames_and_the_engines_step_no_more(scratch, monkeypatch):
+def test_closing_the_popup_stops_device_frames_and_only_the_icon_device_steps(scratch, monkeypatch):
     mount_dot(scratch)
     write_latest(scratch, "working")
     write_settings(scratch, False)  # no bar frames, so every step counted is a device's
@@ -444,7 +444,8 @@ def test_closing_the_popup_stops_device_frames_and_the_engines_step_no_more(scra
     steps["n"] = 0
     h.pump_frames(1.1)
     h.pump_frames(1.2)
-    assert steps["n"] == 0, "a closed popup steps no device engine"
+    # The Dot is the icon's device (D12): only it steps, once per pump, and no row frame is sent.
+    assert steps["n"] == 2, "a closed popup steps only the icon's device"
     assert [e for e in frame_events(out) if e["target"] == "device"] == []
 
 
@@ -692,3 +693,94 @@ def test_a_device_at_brightness_zero_plays_at_full_brightness():
 
 def test_full_brightness_leaves_no_program_as_none():
     assert helper.full_brightness_program(None, 13) is None
+
+
+# --- The bar icon plays its device's frames (D12) ------------------------------
+
+def mount_pro(scratch: Path) -> Path:
+    mount = scratch / "media" / "PulsePro"
+    mount.mkdir(parents=True, exist_ok=True)
+    (mount / "LEDS.LED").write_text("#FF3A00\nrepeat\n")
+    return mount
+
+
+def displays_command(helper_obj: helper.Helper, displays: dict) -> None:
+    helper_obj.handle_line(json.dumps({"cmd": "set-displays", "displays": displays}).encode())
+
+
+def test_the_icon_gets_its_device_frames_while_the_popup_is_closed(scratch):
+    """The icon is always on show, so its device's frames flow with the popup closed; the rows' do not."""
+    mount_dot(scratch)
+    write_latest(scratch, "working")
+    write_settings(scratch, False)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    out.seek(0)
+    out.truncate()
+    h.pump_frames(1.0)
+    icon = [e for e in frame_events(out) if e["target"] == "icon"]
+    assert len(icon) == 1
+    assert len(icon[0]["leds"]) == 2
+    assert any(any(channel > 0 for channel in led) for led in icon[0]["leds"]), "a lit program shows on the icon"
+    assert [e for e in frame_events(out) if e["target"] == "device"] == []
+
+
+def test_the_icon_follows_a_pro_when_both_are_connected(scratch):
+    mount_dot(scratch)
+    mount_pro(scratch)
+    write_latest(scratch, "working")
+    write_settings(scratch, False)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    out.seek(0)
+    out.truncate()
+    h.pump_frames(1.0)
+    icon = [e for e in frame_events(out) if e["target"] == "icon"]
+    assert len(icon[-1]["leds"]) == 8
+
+
+def test_an_icon_device_that_is_not_showing_agent_sends_no_icon_frames(scratch):
+    """Display Off: the icon keeps its State look (the widget draws it when the icon frame is null)."""
+    mount = mount_dot(scratch)
+    write_latest(scratch, "working")
+    write_settings(scratch, False)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    displays_command(h, {str(mount): "off"})
+    out.seek(0)
+    out.truncate()
+    h.pump_frames(1.0)
+    icon = [e for e in frame_events(out) if e["target"] == "icon"]
+    assert icon == [] or icon[-1]["leds"] is None
+
+
+def test_no_device_means_no_icon_frames(scratch):
+    write_latest(scratch, "working")
+    write_settings(scratch, True)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    h.pump_frames(1.0)
+    icon = [e for e in frame_events(out) if e["target"] == "icon"]
+    assert icon == [] or icon[-1]["leds"] is None
+
+
+def test_an_open_popup_steps_the_icon_device_once_per_frame(scratch, monkeypatch):
+    """The row and the icon share one engine: one step per device per frame."""
+    mount_dot(scratch)
+    write_latest(scratch, "working")
+    write_settings(scratch, False)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    popup_command(h, True)
+    steps = {"n": 0}
+    real_step = helper.SdLedWasm.step
+
+    def counting_step(self, now_ms):
+        steps["n"] += 1
+        return real_step(self, now_ms)
+
+    monkeypatch.setattr(helper.SdLedWasm, "step", counting_step)
+    h.pump_frames(1.0)
+    assert steps["n"] == 1
+    assert [e for e in frame_events(out) if e["target"] == "device"]
+    assert [e for e in frame_events(out) if e["target"] == "icon"]

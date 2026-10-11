@@ -620,6 +620,14 @@ def shown_program(device: Device) -> str | None:
         return None
 
 
+def icon_device(devices: list[Device]) -> Device | None:
+    """The device the bar icon is drawn as (D12, D21): a SidePulse Pro wins, else the first device."""
+    for device in devices:
+        if device.kind == "pro":
+            return device
+    return devices[0] if devices else None
+
+
 def full_brightness_program(text: str | None, brightness: int) -> str | None:
     """The device's program as its row plays it: at full brightness (D21).
 
@@ -1840,21 +1848,35 @@ class Helper:
         ms = now * 1000.0
         problems: list[str] = [self.bar_problem] if self.bar_problem else []
         if self.bar is None or self.bar_program_text is None:
-            self.emit_frame("bar", None)
+            self.emit_frame("bar", None, target="bar")
         else:
             problem, leds = self.play(self.bar, self.bar_program_text, ms)
             if problem:
                 problems.append(f"Bar LEDs: {problem}")
-            self.emit_frame("bar", leds)
-        # Device frames are for the popup's rows (D21): none are stepped or sent while it is closed.
-        for device in self.devices if self.popup_open else []:
+            self.emit_frame("bar", leds, target="bar")
+        # Device frames are for the popup's rows (D21), sent only while it is open, and for the bar
+        # icon (D12), which is always on show: its device steps even with the popup closed, while it
+        # shows Agent. Each device steps once per frame, whoever reads it.
+        icon = icon_device(self.devices)
+        if icon is not None and display_of(self.displays or {}, icon.id) != "agent":
+            icon = None
+        icon_leds: list[list[int]] | None = None
+        for device in self.devices:
+            if not self.popup_open and device is not icon:
+                continue
             source = self.device_sources.get(device.id)
             if source is None or source.led_count != device.led_count:
                 source = self.device_sources[device.id] = LedProgram(device.led_count)
             problem, leds = self.play(source, self.device_programs.get(device.id), ms)
             if problem:
                 problems.append(f"{device.name}: {problem}")
-            self.emit_frame(f"device:{device.id}", leds, device=device.id)
+            if self.popup_open:
+                self.emit_frame(f"device:{device.id}", leds, target="device", device=device.id)
+            if device is icon:
+                icon_leds = leds
+        # A null is sent only to clear an icon that was lit; with no device ever, nothing is sent.
+        if icon_leds is not None or "icon" in self.last_frames:
+            self.emit_frame("icon", icon_leds, target="icon")
         self.set_frame_problem("; ".join(problems) if problems else None)
 
     def set_popup(self, command: dict[str, Any]) -> None:
@@ -1880,12 +1902,12 @@ class Helper:
             source.engine, source.text, source.lit = None, None, False
             return f"the engine failed: {type(exc).__name__}: {exc}", source.frame(ms)
 
-    def emit_frame(self, key: str, leds: list[list[int]] | None, device: str | None = None) -> None:
-        """Send a frame when its colours differ from the last one sent for this target."""
+    def emit_frame(self, key: str, leds: list[list[int]] | None, *, target: str, device: str | None = None) -> None:
+        """Send a frame when its colours differ from the last one sent for this key."""
         if key in self.last_frames and self.last_frames[key] == leds:
             return
         self.last_frames[key] = leds
-        event: dict[str, Any] = {"type": "frame", "target": "bar" if device is None else "device", "leds": leds}
+        event: dict[str, Any] = {"type": "frame", "target": target, "leds": leds}
         if device is not None:
             event["device"] = device
         self.emit(event)

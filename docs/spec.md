@@ -145,6 +145,25 @@ _Filled in during grilling, one entry per answered question._
   `sidepulse update` (it force-reinstalls only the `sidepulse` wheel set).
   If wasmtime is missing, the helper reports a capability error and the
   Bar LEDs are unavailable; they do not silently fall back.
+  *Amended in #8:* the engine is `SdLedWasm` in `helper/sidepulse_omarchy.py`
+  (the port of the spike, not a copy kept under `spikes/`); `spikes/wasm/compare.py`
+  imports that class, so the reference check runs the shipped code. The resource
+  is read with upstream's `load_packaged_wasm` (importlib.resources), and the
+  probe checks wasmtime and the resource together. Error names are upstream's
+  `ERROR_NAMES`. The frame rate is upstream's: `FRAME_RATE` 60 for Working and
+  Ask, `IDLE_FRAME_RATE` 12 otherwise, read from its source by a drift test. A
+  frame is sent only when its colours change. Measured in #8 (scratch HOME, 20 s
+  samples, helper process CPU): Bar LEDs off, working 0.5 %; bar only, working
+  1.05 %; bar and two devices, idle 1.0 % and working 1.75 % (133 frame events/s,
+  27 KB/s on stdout); one step of 8 LEDs 0.02 ms (budget 16.7 ms).
+  Install: upstream's README lists no wasmtime step and its METADATA has no
+  extra for it, so the requirement is a plain pip install into the venv:
+  `~/.local/share/sidepulse/venv/bin/python -m pip install wasmtime==49.0.0`
+  (a dry run resolves it; nothing was installed). *This supersedes the earlier
+  "survives `sidepulse update`" note above:* `update.py` runs the installer
+  fetched from sidepulse.io, which is not in the installed code, so keeping
+  wasmtime through an update is unverified. A lost wasmtime shows as the Bar
+  LEDs' capability problem, not as a silent fallback.
 - **D7 Bar LEDs placement:** thin row of LEDs drawn at the bar's inner edge
   (bottom edge for a top bar), centered, on every monitor; never overlaps
   windows.
@@ -153,6 +172,17 @@ _Filled in during grilling, one entry per answered question._
   `root.QsWindow.window.contentItem` (high `z`, anchored to the bottom edge)
   draws across the full bar width on every monitor (3440, 2560, 1920 px
   windows; screenshot-checked). No companion `panel` kind is needed.
+  *Amended in #8:* that spike showed the reparenting works; it did not set the
+  look. The band is centred at upstream's notch width (`WINDOW_WIDTH`, 220 px) for
+  both LED counts, so the blend footprint matches the Mac (a full-width band of
+  two LEDs would be one wash). It is drawn on the bar's inner edge: the bottom of
+  a top bar, the top of a bottom bar. Upstream's 11 px glow is not drawn, since
+  it would sit over the bar's own widgets; the 5 px band and its 1.15 px outer
+  hotline are, with upstream's blend and tone map (`helper/barleds.mjs`). One band
+  per bar window: the first copy of the widget that asks for it holds it
+  (`HelperProcess.wantBand`). The position comes from the window, so which copy
+  holds it does not show. A left or right bar draws nothing and the Settings row
+  says so.
 - **D8 Session click:** focus the terminal window of the process that
   provably runs the session; resume (user's default terminal via
   `xdg-terminal-exec`, in the session cwd, upstream's resume command) only
@@ -367,6 +397,15 @@ _Filled in during grilling, one entry per answered question._
   match the connected product (2 or 8; 8 with none or both, since upstream
   prefers the Pro); the bar icon is a Dot or Pro glyph, neutral when none is
   connected.
+  *Amended in #8:* the Bar LEDs play the program upstream's Notch plays for the
+  agent State (`sync_virtual_status_device`: `program_for_agent_mode` with the
+  user's animation for that State, at the Notch's brightness, 255 unless upstream
+  says otherwise), not the file on the device. The Notch's own Display does not
+  apply to them: they follow the State even when a device is Off. Each device row
+  plays the program its device holds (`LEDS.LED`) through its own engine at the
+  device's LED count, so an Off device shows dark and a Pro shows its own frames.
+  The device's file is read on each tick, so a change of program reaches the row
+  within a second; its animation frames run live.
 - **D22 Own artwork (plan review):** product drawings are our own vector
   shapes in QML, themed, with live LED colours. No SidePulse brand assets.
 - **D23 SidePulse Pro supported, untested (plan review):** the Pro runs through
@@ -398,6 +437,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   │                    functions (*amended in #28*)
 │   ├── sessions.mjs     the Sessions rows' age, provider label and cursor name (*added in #4*)
 │   ├── settings.mjs     the Settings section's presets, hook and log wording (*added in #6*)
+│   ├── barleds.mjs      the Bar LEDs' blend and tone map, upstream's constants (*added in #8*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
@@ -484,6 +524,14 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   from its skip-unchanged-writes cache (`service.py:216-218`), so when the helper sets
   a device back to `agent` the service repaints on its next 1 s poll. The
   helper never needs to repaint agent programs itself.
+- **Amended in #8 (frames):** `frame` (`target`: `bar`, or `device` with
+  `device`: id; `leds`: `[r, g, b]` per LED, 0-255, or `null` to draw nothing).
+  Sent only when the colours of that target change. The loop runs on two
+  deadlines, the one-second tick and the frame (60 fps while the bar's State is
+  Working or Ask, 12 fps otherwise), so a frame costs one step and one line, not
+  a full tick. A program that does not parse is reported as `error` with feature
+  `frames` (PROBLEMS: "LED programs") and plays dark; `clear` follows when it is
+  fixed. `set-bar-leds` answers with `settings` and the next frame.
 
 ### Widget behaviour
 

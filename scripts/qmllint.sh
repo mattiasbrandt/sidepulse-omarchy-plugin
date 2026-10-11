@@ -20,11 +20,10 @@ qmllint=$(command -v qmllint || true)
 [ -x "$qmllint" ] || { echo "qmllint.sh: qmllint not found (install qt6-declarative)" >&2; exit 2; }
 
 cd "$(git rev-parse --show-toplevel)"
-# helper/HelperProcess.qml is a singleton. The Arch qmllint that CI installs
-# reports it as undeclared in its own qmldir, although Panel.qml (linted below)
-# imports helper/ and type-checks the singleton's use through that qmldir.
-# Excluded from the file list for that reason only.
-mapfile -t files < <(git ls-files -- '*.qml' ':!:spikes/**' ':!:helper/HelperProcess.qml')
+mapfile -t files < <(git ls-files -- '*.qml' ':!:spikes/**')
+# A singleton is only recognised when qmllint reads the qmldir that declares
+# it; linting the singleton's own file does not look one up.
+mapfile -t qmldirs < <(git ls-files -- '*qmldir' ':!:spikes/**')
 if [ "${#files[@]}" -eq 0 ]; then
   echo "qmllint.sh: no QML files to lint"
   exit 0
@@ -34,5 +33,7 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 ln -s "$(realpath "$shell_dir")" "$root/qs"
 
-"$qmllint" --max-warnings 0 -I "$root" "${files[@]}"
+qmldir_args=()
+for qmldir in "${qmldirs[@]}"; do qmldir_args+=(-i "$qmldir"); done
+"$qmllint" --max-warnings 0 -I "$root" "${qmldir_args[@]}" "${files[@]}"
 echo "qmllint.sh: ${#files[@]} file(s) clean"

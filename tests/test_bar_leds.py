@@ -54,26 +54,24 @@ def upstream_constants(tree: ast.Module, names: set[str]) -> dict[str, float]:
 
 def test_engine_matches_every_reference_case():
     """Every reference case (off, every AgentMode, built-in styles, battery, invalid, 2 and 8 LEDs)."""
-    compare = reference
-    cases = compare.build_cases()
+    cases = reference.build_cases()
     for case in cases:
         if case["kind"] == "upstream":
             continue
         engine = helper.SdLedWasm(case["led_count"])
         assert engine.parse(case["program"], 0).ok == (case["kind"] != "invalid"), case["name"]
-        for time_ms in compare.TIMES_MS:
+        for time_ms in reference.TIMES_MS:
             frame = engine.step(time_ms)
             if case["expect_all"] is not None:
                 assert frame == [list(case["expect_all"])] * case["led_count"], (case["name"], time_ms)
 
 
 def test_invalid_programs_report_upstreams_error_names():
-    compare = reference
     # Names the engine reports for the cases whose cause is unambiguous; every case must name one of upstream's errors.
     expected = {"invalid-hex": "bad-color", "invalid-brightness": "bad-brightness",
                 "invalid-too-long": "too-long", "invalid-too-many-lines": "too-many-lines"}
     engine = helper.SdLedWasm(8)
-    for name, program in compare.INVALID_PROGRAMS.items():
+    for name, program in reference.INVALID_PROGRAMS.items():
         result = engine.parse(program, 0)
         assert result.ok is False, name
         assert result.error_name in ERROR_NAMES[1:], (name, result.error_name)

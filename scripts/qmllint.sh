@@ -30,5 +30,11 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 ln -s "$(realpath "$shell_dir")" "$root/qs"
 
-"$qmllint" --max-warnings 0 -I "$root" "${files[@]}"
+# Every linted file's directory is also an import path, so the qmldir beside a
+# singleton is read: qmllint does not look there by itself in every version.
+mapfile -t dirs < <(printf '%s\n' "${files[@]}" | xargs -r -n1 dirname | sort -u)
+includes=()
+for dir in "${dirs[@]}"; do includes+=(-I "$dir"); done
+
+"$qmllint" --max-warnings 0 -I "$root" "${includes[@]}" "${files[@]}"
 echo "qmllint.sh: ${#files[@]} file(s) clean"

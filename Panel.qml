@@ -744,7 +744,10 @@ Panel {
         textFormat: Text.PlainText
         visible: setupRow.actionable
         text: setupRow.row.action_label !== undefined ? setupRow.row.action_label : ""
-        color: root.foreground
+        // An action reads as one: accent colour and an underline, not plain body text.
+        color: setupRow.accent
+        font.underline: true
+        font.bold: true
         font.family: root.fontFamily
         font.pixelSize: Style.font.bodySmall
       }

@@ -1700,6 +1700,8 @@ class Helper:
         # Whether the battery safeguard is what keeps the lock off (D11), as the last read saw it: None until the
         # first read, so a helper that starts blocked does not announce a lock it never held.
         self.safeguard_blocking: bool | None = None
+        # The safeguard let go but the lock is not held yet (systemd-inhibit failed): "resumed" waits for it.
+        self.resume_pending = False
         self.power_root = POWER_SUPPLY_ROOT
         self.clock: Callable[[], float] = time.monotonic
         # Laptop (D9, D10). The battery as the last tick read it (None: unreadable) and whether the Battery
@@ -2237,9 +2239,17 @@ class Helper:
         if event != self.last_awake:
             self.last_awake = event
             self.emit(event)
+        # "Resumed" says the lock is held again, so it waits for the inhibitor, not the request; a request
+        # that ends first drops it. The PROBLEMS line says why a lock cannot be taken (D14).
         notice = safeguard_notice(self.safeguard_blocking, blocking, hold,
                                   battery.percent if battery is not None else 0.0)
         self.safeguard_blocking = blocking
+        if notice == SAFEGUARD_RESUMED:
+            self.resume_pending, notice = True, None
+        elif notice is not None or not hold:
+            self.resume_pending = False
+        if self.resume_pending and self.inhibitor.holding():
+            self.resume_pending, notice = False, SAFEGUARD_RESUMED
         if notice is not None:
             self.notify_safeguard(notice)
 

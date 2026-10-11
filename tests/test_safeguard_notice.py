@@ -152,3 +152,45 @@ def test_missing_notify_send_sends_nothing_and_the_problem_line_says_why(clocked
     h.refresh_awake()
     assert h.notifications == []
     assert any("notify-send" in message for message in errors_for(out, "notify"))
+
+
+def test_resume_waits_for_the_lock_to_be_held(notifying, tmp_path, fake_notify_send, monkeypatch):
+    # The safeguard clears but systemd-inhibit cannot start: no "resumed" beside the Keep awake problem line.
+    h, out = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    working = helper.inhibit_argv
+    monkeypatch.setattr(helper, "inhibit_argv", lambda: ["/nonexistent/systemd-inhibit"])
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=True)
+    h.refresh_awake()
+    assert awake_events(out)[-1]["holding"] is False
+    assert any("cannot run systemd-inhibit" in m for m in errors_for(out, "keep_awake"))
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15")]
+
+    # The lock is held on a later read: the pending resume is sent then, once.
+    monkeypatch.setattr(helper, "inhibit_argv", working)  # not undo(): that drops the fixtures' PATH too
+    h.inhibitor.failed = None  # what a later retry sees once the command works again
+    h.refresh_awake()
+    h.refresh_awake()
+    assert awake_events(out)[-1]["holding"] is True
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15"), RESUMED]
+
+
+def test_a_pending_resume_is_dropped_when_keep_awake_stops_wanting_the_lock(notifying, tmp_path, fake_notify_send,
+                                                                          monkeypatch):
+    h, _ = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    working = helper.inhibit_argv
+    monkeypatch.setattr(helper, "inhibit_argv", lambda: ["/nonexistent/systemd-inhibit"])
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=True)
+    h.refresh_awake()
+    send(h, {"cmd": "set-policy", "policy": "never"})
+    monkeypatch.setattr(helper, "inhibit_argv", working)  # not undo(): that drops the fixtures' PATH too
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.refresh_awake()
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15")]

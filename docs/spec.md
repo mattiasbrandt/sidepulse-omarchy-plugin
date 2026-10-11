@@ -334,7 +334,9 @@ _Filled in during grilling, one entry per answered question._
   the lock is held, the helper sends a desktop notice (`notify-send`, no action, no
   wait): `Keep awake paused by the battery safeguard: <N> %, unplugged` when it
   blocks a lock the policy wants, and `Keep awake resumed: plugged in` when Keep awake
-  holds again. The trigger is the block itself (`safeguard_blocks`: the policy wants
+  holds again: once the lock is actually held, not when it is only requested, so a
+  `systemd-inhibit` that cannot start sends no "resumed" (the Keep awake problem line
+  says why), and a request that ends before the lock is held drops it. The trigger is the block itself (`safeguard_blocks`: the policy wants
   a hold and the safeguard is active), so a falling percent does not re-notify. Under
   policy Never nothing is evaluated; with no agent working, under When Agents Work,
   nothing is blocked and nothing is sent. The first read is silent (`safeguard_notice`

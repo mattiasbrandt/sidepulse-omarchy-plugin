@@ -2,6 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(scripts/live-check.sh *)"
+    ],
+    "ask": [
+      "Bash(omarchy plugin enable *)",
+      "Bash(omarchy plugin disable *)"
     ]
   },
   "hooks": {

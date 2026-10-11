@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.4.0...v0.5.0) (2026-10-11)
+
+
+### Features
+
+* **widget:** settings for hooks, timeouts, Bar LEDs and hook log ([#34](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/34)) ([86cf741](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/86cf74136dcc644e6871168268a6255b1e29968f))
+
 ## [0.4.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.3.0...v0.4.0) (2026-10-11)
 
 

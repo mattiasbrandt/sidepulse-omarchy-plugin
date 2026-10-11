@@ -63,3 +63,14 @@ What a device's LEDs show, chosen per device: Agent (the agent State),
 Battery (the battery level) or Off (dark). Battery and Off make the device
 Manual.
 _Avoid_: LED display, mode, led_display (upstream's setting name), Custom
+
+## Keep awake
+
+**Keep awake**:
+Holding the machine's sleep off while agents work, by policy Never / When
+Agents Work / Always.
+_Avoid_: sleep prevention (upstream's setting name), caffeinate, inhibit
+
+**Battery safeguard**:
+Keep awake letting go below a battery level while unplugged.
+_Avoid_: low-battery mode

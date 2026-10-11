@@ -50,9 +50,9 @@ open); a session that has stopped resumes in a new terminal, in its folder. When
 SidePulse cannot tell which process runs a session, the popup says so and does
 nothing.
 
-Bar LEDs (in Settings) draw the agent State's LEDs along the inner edge of a
-top or bottom bar, on every monitor: 2 LEDs for a SidePulse Dot, 8 for a
-SidePulse Pro.
+Bar LEDs (in Settings) draw the agent State's LEDs along the inner edge of the
+bar, on every monitor, on a top, bottom, left or right bar: 2 LEDs for a
+SidePulse Dot, 8 for a SidePulse Pro.
 
 Devices lists each connected SidePulse Dot or SidePulse Pro with its Display
 (Agent or Off) and brightness; each device's LEDs show what its program plays. Off is saved in SidePulse's own settings, so it

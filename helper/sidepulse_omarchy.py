@@ -6,10 +6,12 @@ commands, one JSON object per line, from stdin. It exits when stdin closes.
 
 Events (stdout):
   hello     protocol, helper and upstream versions, capabilities {feature: {ok, reason}}
-  state     four-state label and colour, urgent (Ask), active_count, top session
+  state     four-state label and colour, urgent (Ask), active_count, top session;
+            "unavailable" with a reason while latest.json cannot be read
   setup     ordered items still missing (install, service, device) with an action
   result    outcome of a command that changes something (start-service)
   error     a feature failed or a command was refused; the message says why
+  clear     a feature reported by error has recovered
 
 Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"}.
 
@@ -182,6 +184,21 @@ def state_event(snapshot: Any) -> dict[str, Any]:
     }
 
 
+def unavailable_state_event(reason: str) -> dict[str, Any]:
+    """Replaces the last state when latest.json cannot be read, so the bar never shows a stale one."""
+    return {
+        "type": "state",
+        "state": "unavailable",
+        "label": "Unavailable",
+        "colour": STATE_COLOURS["idle"],
+        "urgent": False,
+        "active_count": 0,
+        "stale_count": 0,
+        "top": None,
+        "reason": reason,
+    }
+
+
 def _top_session(status: Any) -> dict[str, Any] | None:
     if status is None:
         return None
@@ -300,6 +317,13 @@ class Helper:
             self.reported.add((feature, message))
             self.error(feature, message)
 
+    def resolve(self, feature: str) -> None:
+        """The feature works again: clear what report() sent, so a recurrence is reported anew."""
+        recovered = {entry for entry in self.reported if entry[0] == feature}
+        if recovered:
+            self.reported -= recovered
+            self.emit({"type": "clear", "feature": feature})
+
     def hello(self) -> None:
         self.capabilities = probe_capabilities()
         self.emit({
@@ -328,9 +352,12 @@ class Helper:
                 idle_timeout_seconds=idle_timeout_seconds(),
             )
         except (OSError, ValueError) as exc:
-            self.report("state", f"cannot read {self.latest_path}: {exc}")
-            return
-        event = state_event(snapshot)
+            message = f"cannot read {self.latest_path}: {exc}"
+            self.report("state", message)
+            event = unavailable_state_event(message)
+        else:
+            self.resolve("state")
+            event = state_event(snapshot)
         if force or event != self.last_state:
             self.last_state = event
             self.emit(event)
@@ -345,6 +372,8 @@ class Helper:
                 service_running = service_is_running()
             except (OSError, subprocess.SubprocessError) as exc:
                 self.report("service", f"cannot check the SidePulse service: {exc}")
+            else:
+                self.resolve("service")
         device_count: int | None = None
         if self.capabilities.get("devices", {}).get("ok"):
             from sidepulse.device_writer import discover_devices
@@ -353,6 +382,8 @@ class Helper:
                 device_count = len(discover_devices())
             except OSError as exc:
                 self.report("devices", f"cannot look for SidePulse devices: {exc}")
+            else:
+                self.resolve("devices")
         event = setup_event(installed=installed, service_running=service_running, device_count=device_count)
         if force or event != self.last_setup:
             self.last_setup = event

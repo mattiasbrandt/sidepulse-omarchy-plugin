@@ -140,3 +140,36 @@ def test_refresh_command_answers_with_a_fresh_state(helper_proc):
     helper_proc.event_matching(lambda e: e["type"] == "state")
     helper_proc.send({"cmd": "refresh"})
     helper_proc.event_matching(lambda e: e["type"] == "state")
+
+
+def test_unreadable_latest_json_replaces_the_last_state_with_unavailable(helper_proc):
+    helper_proc.write_latest([status_row("working")])
+    helper_proc.event_matching(lambda e: e["type"] == "state" and e["state"] == "working")
+    (helper_proc.state_home / "sidepulse" / "agent-monitor" / "latest.json").write_text("{not json")
+    event = helper_proc.event_matching(lambda e: e["type"] == "state" and e["state"] == "unavailable")
+    assert event["urgent"] is False
+    assert event["active_count"] == 0
+    assert event["top"] is None
+    assert "latest.json" in event["reason"]
+
+
+def test_state_error_clears_when_latest_json_is_readable_again(helper_proc):
+    helper_proc.event_matching(lambda e: e["type"] == "state" and e["state"] == "idle")
+    latest = helper_proc.state_home / "sidepulse" / "agent-monitor" / "latest.json"
+    latest.parent.mkdir(parents=True, exist_ok=True)
+    latest.write_text("{not json")
+    helper_proc.event_matching(lambda e: e["type"] == "error" and e["feature"] == "state")
+    helper_proc.write_latest([status_row("working")])
+    helper_proc.event_matching(lambda e: e["type"] == "clear" and e["feature"] == "state")
+    helper_proc.event_matching(lambda e: e["type"] == "state" and e["state"] == "working")
+
+
+def test_a_problem_that_comes_back_is_reported_again(helper_proc):
+    helper_proc.event_matching(lambda e: e["type"] == "state" and e["state"] == "idle")
+    latest = helper_proc.state_home / "sidepulse" / "agent-monitor" / "latest.json"
+    latest.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        latest.write_text("{not json")
+        helper_proc.event_matching(lambda e: e["type"] == "error" and e["feature"] == "state")
+        helper_proc.write_latest([])
+        helper_proc.event_matching(lambda e: e["type"] == "clear" and e["feature"] == "state")

@@ -68,6 +68,7 @@ Item {
   function processEnded() {
     helloReceived = false
     agentState = null
+    errors = {}  // the next helper re-reports what still fails
     if (refs > 0) {
       restartTimer.interval = backoffMs
       backoffMs = Math.min(backoffMs * 2, restartMaxMs)
@@ -102,6 +103,10 @@ Item {
       lastResult = event
     } else if (event.type === "error") {
       errors = Object.assign({}, errors, { [event.feature]: event.message })
+    } else if (event.type === "clear") {
+      const remaining = Object.assign({}, errors)
+      delete remaining[event.feature]
+      errors = remaining
     }
   }
 

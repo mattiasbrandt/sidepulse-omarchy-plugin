@@ -403,13 +403,26 @@ def timing_change(command: dict[str, Any]) -> tuple[float | None, float | None] 
 
 
 def hooks_event(home: Path | None = None) -> dict[str, Any]:
-    """Each agent's hook config, as `agent-monitor doctor --json` reports it (D13).
+    """Each agent's hook config (D13), one row per agent upstream lists (HOOK_PROVIDERS).
 
-    The CLI prints `{"providers": [...]}` from the same detect_provider_configs call.
+    The rows are doctor's fields plus `installed`: SidePulse's own hooks are
+    present, which is what its log paths show (an unrelated hook on a known
+    event sets hooks_enabled but not installed). Upstream's detectors read
+    whatever JSON a config holds, so one that raises becomes that agent's
+    `error` row; the other agents are still reported (D14).
     """
-    from sidepulse.providers import detect_provider_configs
+    from sidepulse import providers
 
-    return {"type": "hooks", "providers": [config.to_dict() for config in detect_provider_configs(home)]}
+    rows: list[dict[str, Any]] = []
+    for name in providers.HOOK_PROVIDERS:
+        try:
+            config = getattr(providers, f"detect_{name}_config")(home)
+        except Exception as exc:  # the boundary to upstream: report it, keep the other agents
+            rows.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        row = config.to_dict()
+        rows.append(row)
+    return {"type": "hooks", "providers": rows}
 
 
 def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str]:
@@ -1205,7 +1218,11 @@ class Helper:
         except (OSError, ValueError) as exc:
             self.report("hooks", f"cannot read the agent hook configs: {exc}")
             return
-        self.resolve("hooks")
+        problems = [f"{row['provider']}: {row['error']}" for row in event["providers"] if "error" in row]
+        if problems:
+            self.report("hooks", "cannot read " + "; ".join(problems))
+        else:
+            self.resolve("hooks")
         if force or event != self.last_hooks:
             self.last_hooks = event
             self.emit(event)

@@ -155,3 +155,30 @@ def test_damaged_lines_are_skipped(home):
     path.write_text("not json\n" + path.read_text() + "[1, 2]\n")
     rows = helper.hook_log_event(limit=5)["rows"]
     assert [r["event"] for r in rows] == ["Stop"]
+
+
+def test_a_config_that_is_json_but_not_an_object_is_a_problem_not_a_crash(home):
+    # Upstream's detector calls .get() on whatever JSON decodes; a list used to raise AttributeError.
+    (home / "home" / ".claude").mkdir()
+    (home / "home" / ".claude" / "settings.json").write_text("[]")
+    payload = helper.hooks_event()
+    claude = provider(payload, "claude")
+    assert "error" in claude
+    assert claude["error"]
+    # The other agents are still reported.
+    assert provider(payload, "codex")["exists"] is False
+
+
+def test_the_helper_reports_a_hooks_problem_and_keeps_running(home):
+    (home / "home" / ".claude").mkdir()
+    (home / "home" / ".claude" / "settings.json").write_text("[]")
+    out = io.StringIO()
+    h = helper.Helper(out)
+    h.hello()
+    out.seek(0), out.truncate()
+    h.refresh_hooks(force=True)  # must not raise
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [e["type"] for e in events][-1] == "hooks"
+    assert provider(events[-1], "codex")["exists"] is False
+    h.handle_line(b'{"cmd": "refresh"}')  # the helper still answers commands
+

@@ -384,6 +384,31 @@ def test_a_lid_read_failure_is_reported_and_plays_nothing(world):
     assert upstream_value(world) == "agent"
 
 
+def test_a_lid_read_failure_after_closed_forgets_the_lid_and_releases_the_hold(world):
+    # A closed reading followed by failing reads must not keep the device dark: the lid is unknown, not closed.
+    upstream_settings.save_settings(load_settings().with_sleep_prevention_policy("never"))
+    set_display(world, "agent")
+    world.h.active_count = 0
+    world.h.tick()
+    world.lid["closed"] = True
+    world.h.tick()
+    world.now[0] += 1.3 + LID_ANIMATION_FUDGE + 0.01
+    world.h.tick()
+    assert upstream_value(world) == "custom" and shown(world) == off_program()
+
+    def broken():
+        raise OSError("no busctl answer")
+
+    world.h.lid_reader = broken
+    world.h.tick()
+    assert events(world.out, "power")[-1]["lid_closed"] is None
+    assert upstream_value(world) == "agent"
+    world.h.lid_reader = lambda: False
+    world.h.tick()
+    assert events(world.out, "power")[-1]["lid_closed"] is False
+    assert upstream_value(world) == "agent"
+
+
 @pytest.mark.parametrize(("module", "name"), [("battery", "program_for_battery"), ("led_status", "apply_brightness")])
 def test_a_missing_battery_or_lid_function_leaves_agent_and_off_working(world, monkeypatch, module, name):
     # Upstream version skew turns off only the feature that needs the function (D14), not the device reconcile.

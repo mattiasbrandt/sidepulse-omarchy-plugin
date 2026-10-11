@@ -1962,6 +1962,8 @@ class Helper:
             closed = self.lid_reader()
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             self.report("lid", f"cannot read the lid state from logind: {exc}")
+            # Unknown, not the last reading: a stale "closed" would keep the devices dark (D14).
+            self.lid_closed = None
             return
         self.resolve("lid")
         if self.lid_closed is not None and closed != self.lid_closed:

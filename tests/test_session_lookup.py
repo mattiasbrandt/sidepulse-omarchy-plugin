@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from session_lookup import Proc, resolve
+from sidepulse_omarchy import Proc, resolve
 
 SESSION = "019a0000-aaaa-7bbb-8ccc-000000000001"
 CWD = "/work/project"

@@ -40,7 +40,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, Callable, TextIO
 
 PROTOCOL_VERSION = 1
 HELPER_VERSION = "dev"
@@ -419,6 +419,218 @@ class DirWatch:
             names.append(data[offset + 16 : offset + 16 + length].rstrip(b"\0").decode(errors="replace"))
             offset += 16 + length
         return names
+
+
+# --- Sessions (D8): a session's process, window and the three-state lookup ----
+
+PROVIDER_BINARIES = {
+    "claude": "claude",
+    "codex": "codex",
+    "cursor": "cursor-agent",
+    "grok": "grok",
+    "junie": "junie",
+}
+# Processes that only host other processes: a session's owner is never one of them.
+SHELLS = frozenset({"bash", "dash", "fish", "sh", "zsh"})
+COMMAND_TIMEOUT_SECONDS = 10.0
+HYPRLAND_ADDRESS = re.compile(r"0x[0-9a-fA-F]+")
+
+
+class CommandFailed(Exception):
+    """A command the session lookup or open needs (herdr, tmux, hyprctl) failed; the message says why."""
+
+
+class Proc:
+    """Reads process facts from a /proc tree, so tests can supply a fake one."""
+
+    def __init__(self, root: Path = Path("/proc")) -> None:
+        self.root = root
+
+    def _stat_fields(self, pid: int) -> list[str] | None:
+        try:
+            stat = (self.root / str(pid) / "stat").read_text()
+        except OSError:
+            return None
+        # The comm field may contain spaces and parens; fields resume after the last ')'.
+        return stat.rsplit(")", 1)[1].split()
+
+    def starttime(self, pid: int) -> str | None:
+        fields = self._stat_fields(pid)
+        return fields[19] if fields else None
+
+    def ppid(self, pid: int) -> int | None:
+        fields = self._stat_fields(pid)
+        return int(fields[1]) if fields else None
+
+    def has_terminal(self, pid: int) -> bool:
+        fields = self._stat_fields(pid)
+        return bool(fields) and fields[4] != "0"
+
+    def comm(self, pid: int) -> str | None:
+        try:
+            return (self.root / str(pid) / "comm").read_text().strip()
+        except OSError:
+            return None
+
+    def chain(self, pid: int) -> list[int]:
+        """pid and its ancestors, nearest first."""
+        found: list[int] = []
+        current: int | None = pid
+        while current is not None and current > 1 and current not in found:
+            found.append(current)
+            current = self.ppid(current)
+        return found
+
+    def pids_of(self, binary: str) -> list[int]:
+        found = []
+        for entry in self.root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                if (entry / "comm").read_text().strip() == binary[:15]:
+                    found.append(int(entry.name))
+            except OSError:
+                continue
+        return sorted(found)
+
+    def cwd(self, pid: int) -> str | None:
+        try:
+            return os.readlink(self.root / str(pid) / "cwd")
+        except OSError:
+            return None
+
+    def cmdline(self, pid: int) -> list[str]:
+        try:
+            raw = (self.root / str(pid) / "cmdline").read_bytes()
+        except OSError:
+            return []
+        return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+
+
+def claude_pid(session_id: str, proc: Proc, home: Path) -> int | None:
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "sessions"
+    for path in root.glob("*.json"):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if data.get("sessionId") != session_id:
+            continue
+        pid = int(data["pid"])
+        if proc.starttime(pid) == str(data.get("procStart")):
+            return pid
+    return None
+
+
+def grok_pid(session_id: str, proc: Proc, home: Path) -> int | None:
+    try:
+        entries = json.loads((home / ".grok" / "active_sessions.json").read_text())
+    except (OSError, ValueError):
+        return None
+    for entry in entries:
+        if entry.get("session_id") == session_id and proc.starttime(int(entry["pid"])):
+            return int(entry["pid"])
+    return None
+
+
+EXACT_SOURCES = {"claude": claude_pid, "grok": grok_pid}
+
+
+def names_session(args: list[str], session_id: str) -> bool:
+    """True when an argument is the session id itself or `--flag=<id>`."""
+    return any(arg == session_id or arg.endswith("=" + session_id) for arg in args)
+
+
+def find_process(provider: str, session_id: str, cwd: str | None, proc: Proc, home: Path) -> dict:
+    """Return {"state": stopped|live|unresolved, ...} for the session's process."""
+    exact = EXACT_SOURCES.get(provider)
+    if exact is not None:
+        pid = exact(session_id, proc, home)
+        if pid is not None:
+            return {"state": "live", "pid": pid, "proof": "session-file"}
+
+    binary = PROVIDER_BINARIES.get(provider)
+    if binary is None:
+        return {"state": "unresolved", "reason": f"unknown provider {provider!r}", "candidates": []}
+    # Interactive agents hold a terminal; daemons such as `codex app-server` do not.
+    pids = [pid for pid in proc.pids_of(binary) if proc.has_terminal(pid)]
+    by_cmdline = [pid for pid in pids if names_session(proc.cmdline(pid), session_id)]
+    if len(by_cmdline) == 1:
+        return {"state": "live", "pid": by_cmdline[0], "proof": "cmdline"}
+    if len(by_cmdline) > 1:
+        return {"state": "unresolved", "reason": "several processes name this session", "candidates": by_cmdline}
+    if cwd is None:
+        return {"state": "unresolved", "reason": "session has no cwd to check", "candidates": pids}
+    in_cwd = [pid for pid in pids if proc.cwd(pid) == cwd]
+    if in_cwd:
+        return {"state": "unresolved", "reason": f"{binary} runs in {cwd} but nothing ties it to this session",
+                "candidates": in_cwd}
+    return {"state": "stopped"}
+
+
+def ai_title(session_id: str, cwd: str, home: Path) -> str | None:
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "projects"
+    transcript = root / cwd.replace("/", "-") / f"{session_id}.jsonl"
+    title = None
+    try:
+        with transcript.open() as handle:
+            for line in handle:
+                if '"ai-title"' in line:
+                    title = json.loads(line).get("aiTitle") or title
+    except OSError:
+        return None
+    return title
+
+
+def run_command(argv: list[str]) -> subprocess.CompletedProcess:
+    """Runs one command for the session lookup. A binary that cannot run raises CommandFailed."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_SECONDS, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CommandFailed(f"{argv[0]} cannot run: {exc}") from exc
+
+
+def hypr_clients(run: Callable[[list[str]], subprocess.CompletedProcess]) -> list[dict]:
+    done = run(["hyprctl", "clients", "-j"])
+    if done.returncode != 0:
+        raise CommandFailed(f"hyprctl clients: {(done.stderr or done.stdout).strip() or 'exit ' + str(done.returncode)}")
+    return json.loads(done.stdout)
+
+
+def find_window(provider: str, session_id: str, cwd: str | None, pid: int, proc: Proc, home: Path,
+                clients: list[dict]) -> dict:
+    """Walk the ancestors to the first pid that owns Hyprland clients, then pick one of them."""
+    by_pid: dict[int, list[dict]] = {}
+    for client in clients:
+        by_pid.setdefault(client["pid"], []).append(client)
+    chain = proc.chain(pid)
+    for owner in chain:
+        if owner not in by_pid:
+            continue
+        candidates = by_pid[owner]
+        if len(candidates) > 1 and provider == "claude" and cwd:
+            title = ai_title(session_id, cwd, home)
+            if title:
+                candidates = [c for c in candidates if title in c["title"]]
+        if len(candidates) == 1:
+            return {"action": "focus", "address": candidates[0]["address"], "title": candidates[0]["title"]}
+        return {"action": "ambiguous-window", "candidates": len(candidates)}
+    return {"action": "no-window", "ancestry": chain}
+
+
+def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None = None,
+            home: Path | None = None, clients: list[dict] | None = None,
+            run: Callable[[list[str]], subprocess.CompletedProcess] = run_command) -> dict:
+    proc = proc or Proc()
+    home = home or Path.home()
+    found = find_process(provider, session_id, cwd, proc, home)
+    if found["state"] == "stopped":
+        return {**found, "action": "resume"}
+    if found["state"] == "unresolved":
+        return {**found, "action": "explain"}
+    window = find_window(provider, session_id, cwd, found["pid"], proc, home,
+                         hypr_clients(run) if clients is None else clients)
+    return {**found, **window}
 
 
 class Helper:

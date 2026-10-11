@@ -21,9 +21,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))  # -I drops the script dir; add it back explicitly.
+# The engine under test is the one the helper ships (helper/sidepulse_omarchy.py, D6), not a copy.
+sys.path.insert(0, str(HERE.parent.parent / "helper"))  # -I drops the script dir; add it back explicitly.
 
-from sdled_wasmtime import SdLedWasm, default_wasm_bytes  # noqa: E402
+from sidepulse_omarchy import SdLedWasm  # noqa: E402
+from sidepulse.led_wasm import load_packaged_wasm  # noqa: E402
 
 DENO = "/usr/bin/deno"
 DRIVER_JS = HERE / "sdled_driver.js"
@@ -179,7 +181,7 @@ def main() -> int:
 
     if args.sp_src is not None:
         sys.path.insert(1, str(args.sp_src / "src"))
-    wasm_bytes = default_wasm_bytes()
+    wasm_bytes = load_packaged_wasm()
     wasm_b64 = base64.b64encode(wasm_bytes).decode("ascii")
     print(f"sdled.wasm: {len(wasm_bytes)} bytes  sha256={__import__('hashlib').sha256(wasm_bytes).hexdigest()[:16]}")
 

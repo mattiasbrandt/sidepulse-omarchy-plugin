@@ -620,6 +620,28 @@ def shown_program(device: Device) -> str | None:
         return None
 
 
+def full_brightness_program(text: str | None, brightness: int) -> str | None:
+    """The device's program as its row plays it: at full brightness (D21).
+
+    Upstream writes the program through apply_brightness, which scales every
+    `brightness N` line by the device's brightness (0-255). A screen pixel at a few
+    percent is black where a real LED still shines, so the row undoes that scaling;
+    the brightness slider shows the brightness. A device at 0 plays at full.
+    """
+    if text is None:
+        return None
+    lines = []
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*brightness\s+(\d+)\s*", line, re.IGNORECASE)
+        if match is None:
+            lines.append(line)
+        elif brightness <= 0:
+            lines.append("brightness 255")
+        else:
+            lines.append(f"brightness {min(255, round(int(match.group(1)) * 255 / brightness))}")
+    return "\n".join(lines)
+
+
 def set_device_brightness(device: Device, percent: float) -> None:
     """Upstream's brightness is 0-255 per device; the widget speaks percent."""
     from sidepulse.settings import normalize_brightness
@@ -1747,8 +1769,14 @@ class Helper:
             # Cleared only by a pass that reached every device.
             if not failed:
                 self.resolve("devices")
-        # The program each device holds now: its LED frames play it (the popup's device rows, D21).
-        self.device_programs = {device.id: shown_program(device) for device in self.devices}
+        # The program each device holds now, at full brightness: its LED frames play it (the popup's device rows, D21).
+        from sidepulse.settings import load_settings
+
+        settings = load_settings()
+        self.device_programs = {
+            device.id: full_brightness_program(shown_program(device), settings.brightness_for_device(device.id))
+            for device in self.devices
+        }
         self.refresh_bar()
         event = self.devices_event()
         if force or event != self.last_devices:

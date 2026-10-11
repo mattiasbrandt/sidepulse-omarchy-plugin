@@ -662,3 +662,33 @@ def test_the_widget_receives_bar_frames_with_eight_leds_and_no_device(protocol):
     assert all(f["target"] == "bar" and len(f["leds"]) == 8 for f in frames)
     assert any(any(v for led in f["leds"] for v in led) for f in frames)
     proc.close()
+
+
+# --- Device rows play the program at full brightness ---------------------------
+
+def test_a_device_row_plays_its_program_at_full_brightness():
+    """A Dot at brightness 13 holds `brightness 13`; its row undoes that scaling, so a
+    5 % device still shows its colours on screen (the slider shows the brightness)."""
+    from sidepulse.led_status import apply_brightness
+
+    authored = "brightness 200\n0:#00E5FF 760ms pulse 0ms\nrepeat"
+    written = apply_brightness(authored, 13)
+    assert written.splitlines()[0] == "brightness 10"
+    assert helper.full_brightness_program(written, 13).splitlines()[0] == "brightness 196"
+
+
+def test_a_program_without_a_brightness_line_is_left_as_it_is():
+    from sidepulse.led_status import apply_brightness
+
+    written = apply_brightness("0:#00E5FF 760ms pulse 0ms\nrepeat", 13)
+    assert written.splitlines()[0] == "brightness 13"
+    assert helper.full_brightness_program(written, 13).splitlines()[0] == "brightness 255"
+    assert helper.full_brightness_program("0:#00E5FF\nrepeat", 255) == "0:#00E5FF\nrepeat"
+
+
+def test_a_device_at_brightness_zero_plays_at_full_brightness():
+    assert helper.full_brightness_program("brightness 0\n0:#00E5FF\nrepeat", 0).splitlines()[0] == "brightness 255"
+
+
+def test_full_brightness_leaves_no_program_as_none():
+    assert helper.full_brightness_program(None, 13) is None

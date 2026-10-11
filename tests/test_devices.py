@@ -111,18 +111,16 @@ def test_save_drops_keys_upstream_does_not_model_as_upstream_does(home, mounts):
 
 def test_off_takes_the_device_to_manual_and_writes_upstreams_off_program(home, mounts):
     device = device_by_name("PulseDot")
-    written: set[str] = set()
-    helper.apply_display(device, "off", written_off=written)
+    helper.apply_display(device, "off")
     assert load_settings().display_for_device(device.id) == "custom"
     assert (mounts / "PulseDot" / "LEDS.LED").read_text().strip() == off_program()
-    assert written == {device.id}
 
 
 def test_agent_hands_the_device_back_to_the_service_without_writing(home, mounts):
     device = device_by_name("PulseDot")
-    helper.apply_display(device, "off", written_off=set())
+    helper.apply_display(device, "off")
     (mounts / "PulseDot" / "LEDS.LED").unlink()
-    helper.apply_display(device, "agent", written_off=set())
+    helper.apply_display(device, "agent")
     assert load_settings().display_for_device(device.id) == "agent"
     assert not (mounts / "PulseDot" / "LEDS.LED").exists()
 
@@ -140,18 +138,29 @@ def test_a_device_left_manual_by_a_crash_is_repaired_to_agent(home, mounts):
     # The helper died mid-takeover: upstream says custom, nothing is remembered.
     helper.save_device_settings(
         lambda s: s.with_device_display(device.id, "custom", name=device.name, path=device.path))
-    helper.apply_display(device, helper.display_of({}, device.id), written_off=set())
+    helper.apply_display(device, helper.display_of({}, device.id))
     assert load_settings().display_for_device(device.id) == "agent"
 
 
-def test_off_is_written_once_per_helper_not_on_every_tick(home, mounts):
+def test_off_repairs_a_program_written_after_it(home, mounts, monkeypatch):
+    # The service read settings before Off was saved, then wrote its agent
+    # program after the helper's off program (upstream service.sync_outputs).
     device = device_by_name("PulseDot")
-    written: set[str] = set()
-    helper.apply_display(device, "off", written_off=written)
+    helper.apply_display(device, "off")
     led = mounts / "PulseDot" / "LEDS.LED"
-    led.write_text("something else")
-    helper.apply_display(device, "off", written_off=written)
-    assert led.read_text() == "something else"
+    led.write_text("an agent program the service planned before Off\n")
+    helper.apply_display(device, "off")
+    assert led.read_text().strip() == off_program()
+
+
+def test_off_is_not_rewritten_while_the_device_shows_it(home, mounts, monkeypatch):
+    device = device_by_name("PulseDot")
+    helper.apply_display(device, "off")
+    writes = []
+    import sidepulse.device_writer as device_writer
+    monkeypatch.setattr(device_writer, "write_led_program", lambda *a, **k: writes.append(a))
+    helper.apply_display(device, "off")
+    assert writes == []
 
 
 def test_brightness_percent_maps_to_upstreams_0_to_255(home, mounts):

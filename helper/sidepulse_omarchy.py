@@ -331,12 +331,14 @@ def display_of(displays: dict[str, str], device_id: str) -> str:
     return display if display in DISPLAYS else DEFAULT_DISPLAY
 
 
-def apply_display(device: Device, display: str, *, written_off: set[str]) -> None:
-    """Bring one device to its remembered display (D9).
+def apply_display(device: Device, display: str) -> None:
+    """Bring one device to its remembered Display (D9).
 
     Agent: upstream's `agent`, so the service repaints within its next poll.
-    Off: upstream's `custom` (Manual), so the service stops writing; the off
-    program is written once per helper, not on every tick.
+    Off: upstream's `custom` (Manual), so the service stops writing, and the
+    device is checked on every tick: the service may write an agent program it
+    planned before reading `custom`, so whenever the device no longer shows
+    upstream's off program it is written again.
     """
     from sidepulse.led_status import builtin_animation_program
     from sidepulse.device_writer import write_led_program
@@ -347,11 +349,17 @@ def apply_display(device: Device, display: str, *, written_off: set[str]) -> Non
         save_device_settings(
             lambda s: s.with_device_display(device.id, upstream, name=device.name, path=device.path))
     if upstream == "custom":
-        if device.id not in written_off:
-            write_led_program(builtin_animation_program("off", device.led_count), device_path=device.target)
-            written_off.add(device.id)
-    else:
-        written_off.discard(device.id)
+        program = builtin_animation_program("off", device.led_count)
+        if shown_program(device) != program.strip():
+            write_led_program(program, device_path=device.target)
+
+
+def shown_program(device: Device) -> str | None:
+    """The LED program the device holds now; None when it holds none."""
+    try:
+        return Path(device.target).read_text().strip()
+    except FileNotFoundError:
+        return None
 
 
 def set_device_brightness(device: Device, percent: float) -> None:
@@ -414,7 +422,6 @@ class Helper:
         # The widget's remembered displays. None until it sends them: a fresh
         # helper must not reset devices before it knows what the user chose.
         self.displays: dict[str, str] | None = None
-        self.written_off: set[str] = set()
         self.reported: set[tuple[str, str]] = set()
         self.buffer = b""
         self.ticks = 0
@@ -514,7 +521,7 @@ class Helper:
             pending = self.devices if self.displays is not None else []
             for device in pending:
                 try:
-                    apply_display(device, display_of(self.displays, device.id), written_off=self.written_off)
+                    apply_display(device, display_of(self.displays, device.id))
                 except (OSError, ValueError, DeviceWriteError) as exc:
                     failed = True
                     self.report("devices", f"{device.name}: {exc}")

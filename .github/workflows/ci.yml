@@ -114,6 +114,22 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           scripts/qmllint.sh .omarchy/shell
 
+  qml-logic:
+    name: qml logic tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Tests
+        # The QML's lifecycle decisions live in ECMAScript modules beside it
+        # (helper/lifecycle.mjs); node runs their tests. The runner's own node
+        # is enough: the modules use nothing newer than ES2017.
+        run: |
+          node --version
+          node --test tests/*.test.mjs
+
   actionlint:
     name: actionlint
     runs-on: ubuntu-24.04

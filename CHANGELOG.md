@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.6.0...v0.7.0) (2026-10-11)
+
+
+### Features
+
+* **bar-leds:** draw the Bar LEDs along the bar edge ([#39](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/39)) ([c19665b](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/c19665bbfeda329bcc549d928808825326ec9df0))
+
 ## [0.6.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.5.0...v0.6.0) (2026-10-11)
 
 

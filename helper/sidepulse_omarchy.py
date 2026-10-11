@@ -12,8 +12,13 @@ Events (stdout):
   result    outcome of a command that changes something (start-service)
   error     a feature failed or a command was refused; the message says why
   clear     a feature reported by error has recovered
+  devices   connected SidePulse devices: id, product, LED count, remembered
+            display (agent, battery, off) and brightness percent
 
-Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"}.
+Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"},
+{"cmd": "set-displays", "displays": {device id: display}} (the widget's full
+remembered map; the helper reconciles every connected device to it, D9), and
+{"cmd": "set-brightness", "device": id, "percent": 0-100}.
 
 It never binds events.sock: that socket belongs to upstream's service (D4).
 """
@@ -30,6 +35,7 @@ import select
 import struct
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -40,6 +46,12 @@ TICK_SECONDS = 1.0
 SETUP_EVERY_TICKS = 5
 SERVICE_START_TIMEOUT_SECONDS = 60.0
 INSTALL_COMMAND = "curl -fsSL https://sidepulse.io/setup.sh | bash"
+# Agent, Battery, Off (D9). Upstream stores only Agent or Manual ("custom") on
+# Linux, so Battery and Off both hold the device in Manual.
+DISPLAYS = ("agent", "battery", "off")
+DEFAULT_DISPLAY = "agent"
+UPSTREAM_DISPLAY = {"agent": "agent", "battery": "custom", "off": "custom"}
+PRODUCT_NAMES = {"dot": "SidePulse Dot", "pro": "SidePulse Pro"}
 
 # Upstream's four-state UI mapping is `state_for_mode` in status_bar.py (lines
 # 461-472 at upstream 6d55225). That module needs PyObjC, so it cannot be
@@ -73,7 +85,11 @@ REQUIRED_NAMES = {
         "sidepulse.settings": ("load_settings",),
     },
     "service": {"sidepulse.service_launch": ("service_is_running",)},
-    "devices": {"sidepulse.device_writer": ("discover_devices",)},
+    "devices": {
+        "sidepulse.device_writer": ("discover_devices", "write_led_program"),
+        "sidepulse.settings": ("load_settings", "save_settings"),
+        "sidepulse.led_status": ("led_count_for_target", "builtin_animation_program"),
+    },
 }
 WASMTIME_REASON = "wasmtime is not installed in the SidePulse venv; the Bar LEDs need it"
 
@@ -255,6 +271,117 @@ def start_service(python: str) -> tuple[bool, str]:
     return result.returncode == 0, output or f"exit {result.returncode}"
 
 
+@dataclass(frozen=True)
+class Device:
+    """A mounted SidePulse device, as upstream's discover_devices finds it (D21, D23)."""
+
+    id: str  # upstream's device id: the mount root, as the service keys it
+    name: str
+    path: str
+    target: Path  # the LEDS.LED file the program is written to
+    kind: str  # "dot" or "pro"
+    led_count: int
+
+    @property
+    def product(self) -> str:
+        return PRODUCT_NAMES[self.kind]
+
+
+def discover_device_rows() -> list[Device]:
+    """Upstream's discovery. The LED count is upstream's own rule (by the mount's name);
+    a device it cannot name is reported as a Pro, the 8-LED default."""
+    from sidepulse.device_writer import discover_devices
+    from sidepulse.led_status import led_count_for_target
+
+    rows: list[Device] = []
+    for candidate in discover_devices():
+        root = candidate.root.expanduser()
+        led_count = led_count_for_target(candidate.target)
+        rows.append(Device(
+            id=str(root),
+            name=root.name,
+            path=str(root),
+            target=candidate.target,
+            kind="dot" if led_count == 2 else "pro",
+            led_count=led_count,
+        ))
+    return rows
+
+
+def save_device_settings(change: Any) -> None:
+    """Load, change and save upstream settings.json (D9, D13).
+
+    Upstream's save_settings rewrites the file from its own model and drops keys
+    it does not know, so the keys the file held before are put back. A file that
+    is not JSON raises here, before anything is overwritten.
+    """
+    from sidepulse.settings import default_settings_path, load_settings, save_settings
+
+    path = default_settings_path()
+    before: dict[str, Any] = {}
+    if path.exists():
+        before = json.loads(path.read_text())
+        if not isinstance(before, dict):
+            raise ValueError(f"{path} is not a JSON object; not overwriting it")
+    save_settings(change(load_settings(path)), path)
+    restore_unmodelled_keys(path, before)
+
+
+def restore_unmodelled_keys(path: Path, before: dict[str, Any]) -> None:
+    after = json.loads(path.read_text())
+    for key, value in before.items():
+        after.setdefault(key, value)
+    old_devices = {
+        entry["id"]: entry
+        for entry in before.get("devices", [])
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    }
+    for entry in after.get("devices", []):
+        old = old_devices.get(entry.get("id"))
+        if old is not None:
+            for key, value in old.items():
+                entry.setdefault(key, value)
+    path.write_text(json.dumps(after, indent=2, sort_keys=True) + "\n")
+
+
+def display_of(displays: dict[str, str], device_id: str) -> str:
+    """The widget's remembered display for a device; Agent when none is remembered."""
+    return displays.get(device_id, DEFAULT_DISPLAY)
+
+
+def apply_display(device: Device, display: str, *, written_off: set[str]) -> None:
+    """Bring one device to its remembered display (D9).
+
+    Agent: upstream's `agent`, so the service repaints within its next poll.
+    Battery and Off: upstream's `custom` (Manual), so the service stops writing;
+    the off program is written once per helper, not on every tick. Battery shows
+    the off program until the battery reader lands (#11).
+    """
+    from sidepulse.led_status import builtin_animation_program
+    from sidepulse.device_writer import write_led_program
+    from sidepulse.settings import load_settings
+
+    upstream = UPSTREAM_DISPLAY[display]
+    if load_settings().display_for_device(device.id) != upstream:
+        save_device_settings(
+            lambda s: s.with_device_display(device.id, upstream, name=device.name, path=device.path))
+    if upstream == "custom":
+        if device.id not in written_off:
+            write_led_program(builtin_animation_program("off", device.led_count), device_path=device.target)
+            written_off.add(device.id)
+    else:
+        written_off.discard(device.id)
+
+
+def set_device_brightness(device: Device, percent: float) -> None:
+    """Upstream's brightness is 0-255 per device; the widget speaks percent."""
+    from sidepulse.settings import normalize_brightness
+
+    value = normalize_brightness(percent * 255 / 100)
+    save_device_settings(
+        lambda s: s.with_device_brightness(device.id, value, name=device.name, path=device.path))
+
+
 class DirWatch:
     """inotify on a directory, for MOVED_TO latest.json (the service's tmp + rename)."""
 
@@ -300,6 +427,13 @@ class Helper:
         self.watch: DirWatch | None = None
         self.last_state: dict[str, Any] | None = None
         self.last_setup: dict[str, Any] | None = None
+        self.last_devices: dict[str, Any] | None = None
+        self.devices: list[Device] = []
+        self.device_count: int | None = None
+        # The widget's remembered displays. None until it sends them: a fresh
+        # helper must not reset devices before it knows what the user chose.
+        self.displays: dict[str, str] | None = None
+        self.written_off: set[str] = set()
         self.reported: set[tuple[str, str]] = set()
         self.buffer = b""
         self.ticks = 0
@@ -374,24 +508,94 @@ class Helper:
                 self.report("service", f"cannot check the SidePulse service: {exc}")
             else:
                 self.resolve("service")
-        device_count: int | None = None
-        if self.capabilities.get("devices", {}).get("ok"):
-            from sidepulse.device_writer import discover_devices
-
-            try:
-                device_count = len(discover_devices())
-            except OSError as exc:
-                self.report("devices", f"cannot look for SidePulse devices: {exc}")
-            else:
-                self.resolve("devices")
-        event = setup_event(installed=installed, service_running=service_running, device_count=device_count)
+        event = setup_event(installed=installed, service_running=service_running, device_count=self.device_count)
         if force or event != self.last_setup:
             self.last_setup = event
             self.emit(event)
 
+    def refresh_devices(self, force: bool = False) -> None:
+        """Discover the devices, bring each to its remembered display (D9), and report them."""
+        if not self.capabilities.get("devices", {}).get("ok"):
+            self.device_count = None
+            return
+        try:
+            self.devices = discover_device_rows()
+        except OSError as exc:
+            self.report("devices", f"cannot look for SidePulse devices: {exc}")
+            self.devices = []
+            self.device_count = None
+        else:
+            from sidepulse.device_writer import DeviceWriteError
+
+            self.device_count = len(self.devices)
+            failed = False
+            # Nothing is reconciled until the widget has sent its remembered displays.
+            pending = self.devices if self.displays is not None else []
+            for device in pending:
+                try:
+                    apply_display(device, display_of(self.displays, device.id), written_off=self.written_off)
+                except (OSError, ValueError, DeviceWriteError) as exc:
+                    failed = True
+                    self.report("devices", f"{device.name}: {exc}")
+            # Cleared only by a pass that reached every device.
+            if not failed:
+                self.resolve("devices")
+        event = self.devices_event()
+        if force or event != self.last_devices:
+            self.last_devices = event
+            self.emit(event)
+
+    def devices_event(self) -> dict[str, Any]:
+        from sidepulse.settings import load_settings
+
+        settings = load_settings()
+        items = []
+        for device in self.devices:
+            items.append({
+                "id": device.id,
+                "name": device.name,
+                "path": device.path,
+                "product": device.product,
+                "kind": device.kind,
+                "led_count": device.led_count,
+                "display": display_of(self.displays or {}, device.id),
+                "percent": round(settings.brightness_for_device(device.id) * 100 / 255),
+            })
+        return {"type": "devices", "items": items}
+
     def refresh(self, force: bool = False) -> None:
         self.refresh_state(force)
+        self.refresh_devices(force)
         self.refresh_setup(force)
+
+    def set_displays(self, command: dict[str, Any]) -> None:
+        displays = command.get("displays")
+        if not isinstance(displays, dict):
+            self.error("command", "set-displays needs an object of device id to display")
+            return
+        unknown = [value for value in displays.values() if value not in DISPLAYS]
+        if unknown:
+            self.error("command", f"unknown display {unknown[0]!r}; use agent, battery or off")
+            return
+        self.displays = {str(key): value for key, value in displays.items()}
+        self.refresh_devices(force=True)
+
+    def set_brightness(self, command: dict[str, Any]) -> None:
+        device_id = command.get("device")
+        percent = command.get("percent")
+        valid = isinstance(device_id, str) and isinstance(percent, (int, float)) and not isinstance(percent, bool)
+        if not valid or not 0 <= percent <= 100:
+            self.error("command", "set-brightness needs a device id and a percent from 0 to 100")
+            return
+        device = next((d for d in self.devices if d.id == device_id), None)
+        if device is None:
+            self.error("command", f"no connected SidePulse device {device_id}")
+            return
+        try:
+            set_device_brightness(device, percent)
+        except (OSError, ValueError) as exc:
+            self.error("devices", f"{device.name}: {exc}")
+        self.refresh_devices(force=True)
 
     def handle_line(self, raw: bytes) -> None:
         try:
@@ -406,6 +610,10 @@ class Helper:
             ok, message = start_service(sys.executable)
             self.emit({"type": "result", "command": "start-service", "ok": ok, "message": message})
             self.refresh_setup(force=True)
+        elif name == "set-displays":
+            self.set_displays(command)
+        elif name == "set-brightness":
+            self.set_brightness(command)
         else:
             self.error("command", f"unknown command {name!r}")
 
@@ -438,6 +646,7 @@ class Helper:
                 self.refresh_state()
             self.ticks += 1
             self.refresh_state()  # re-run the rules so ages and staleness advance
+            self.refresh_devices()
             if self.ticks % SETUP_EVERY_TICKS == 0:
                 self.refresh_setup()
 

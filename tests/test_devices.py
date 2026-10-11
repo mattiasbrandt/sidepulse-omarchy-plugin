@@ -1,0 +1,248 @@
+"""Devices (D9, D13): discovery, Agent / Battery / Off, brightness, settings round-trip.
+
+Upstream's own code does the work: discover_devices, LED counts, load_settings,
+save_settings, write_led_program. Expected values come from upstream's
+resource files and literal numbers, never from the helper itself.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import select
+import subprocess
+import sys
+import time
+from importlib.resources import files
+from pathlib import Path
+
+import pytest
+
+import sidepulse_omarchy as helper
+from sidepulse.settings import load_settings
+
+HELPER = Path(__file__).resolve().parent.parent / "helper" / "sidepulse_omarchy.py"
+
+
+def off_program() -> str:
+    """Upstream's off.LED for the device, read straight from its resources."""
+    return files("sidepulse.resources").joinpath("animations", "off.LED").read_text(encoding="utf-8").strip()
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A private HOME and XDG dirs, so no test touches the real user's files."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    (tmp_path / "home").mkdir()
+    return tmp_path
+
+
+@pytest.fixture
+def mounts(home, monkeypatch):
+    """Two mounted devices: a SidePulse Pro and a SidePulse Dot (the PulseDot drive)."""
+    root = home / "media"
+    (root / "SidePulsePro").mkdir(parents=True)
+    (root / "PulseDot").mkdir(parents=True)
+    monkeypatch.setenv("SIDEPULSE_MOUNT_ROOTS", str(root))
+    return root
+
+
+def settings_file(home: Path) -> Path:
+    return home / "config" / "sidepulse" / "agent-monitor" / "settings.json"
+
+
+def read_settings_json(home: Path) -> dict:
+    return json.loads(settings_file(home).read_text())
+
+
+def upstream_entry(home: Path, device_id: str) -> dict:
+    return next(entry for entry in read_settings_json(home)["devices"] if entry["id"] == device_id)
+
+
+def device_by_name(name: str) -> helper.Device:
+    for device in helper.discover_device_rows():
+        if device.name == name:
+            return device
+    raise AssertionError(f"no device named {name}")
+
+
+def test_discovery_reports_each_product_with_its_led_count(mounts):
+    pro = device_by_name("SidePulsePro")
+    dot = device_by_name("PulseDot")
+    assert (pro.kind, pro.led_count) == ("pro", 8)
+    assert (dot.kind, dot.led_count) == ("dot", 2)
+    assert pro.id == str(mounts / "SidePulsePro")
+    assert dot.path == str(mounts / "PulseDot")
+
+
+def test_save_keeps_keys_upstream_does_not_model(home, mounts):
+    device = device_by_name("PulseDot")
+    settings_file(home).parent.mkdir(parents=True)
+    settings_file(home).write_text(json.dumps({
+        "led_display": "agent",
+        "a_key_from_a_newer_upstream": {"kept": True},
+        "devices": [{
+            "id": device.id, "name": "PulseDot", "path": device.path,
+            "led_display": "agent", "brightness": 255, "note": "kept too",
+        }],
+    }))
+    helper.set_device_brightness(device, 40)
+    data = read_settings_json(home)
+    assert data["a_key_from_a_newer_upstream"] == {"kept": True}
+    assert data["devices"][0]["note"] == "kept too"
+    assert data["devices"][0]["brightness"] == 102
+    assert data["devices"][0]["led_display"] == "agent"
+
+
+def test_off_takes_the_device_to_manual_and_writes_upstreams_off_program(home, mounts):
+    device = device_by_name("PulseDot")
+    written: set[str] = set()
+    helper.apply_display(device, "off", written_off=written)
+    assert load_settings().display_for_device(device.id) == "custom"
+    assert (mounts / "PulseDot" / "LEDS.LED").read_text().strip() == off_program()
+    assert written == {device.id}
+
+
+def test_agent_hands_the_device_back_to_the_service_without_writing(home, mounts):
+    device = device_by_name("PulseDot")
+    helper.apply_display(device, "off", written_off=set())
+    (mounts / "PulseDot" / "LEDS.LED").unlink()
+    helper.apply_display(device, "agent", written_off=set())
+    assert load_settings().display_for_device(device.id) == "agent"
+    assert not (mounts / "PulseDot" / "LEDS.LED").exists()
+
+
+def test_battery_is_manual_with_the_off_program_until_the_battery_reader_lands(home, mounts):
+    # Stopgap for #11: upstream cannot drive battery on Linux, so Battery holds
+    # the device in Manual and shows the off program rather than a stale frame.
+    device = device_by_name("PulseDot")
+    helper.apply_display(device, "battery", written_off=set())
+    assert load_settings().display_for_device(device.id) == "custom"
+    assert (mounts / "PulseDot" / "LEDS.LED").read_text().strip() == off_program()
+
+
+def test_a_device_left_manual_by_a_crash_is_repaired_to_agent(home, mounts):
+    device = device_by_name("PulseDot")
+    # The helper died mid-takeover: upstream says custom, nothing is remembered.
+    helper.save_device_settings(
+        lambda s: s.with_device_display(device.id, "custom", name=device.name, path=device.path))
+    helper.apply_display(device, helper.display_of({}, device.id), written_off=set())
+    assert load_settings().display_for_device(device.id) == "agent"
+
+
+def test_off_is_written_once_per_helper_not_on_every_tick(home, mounts):
+    device = device_by_name("PulseDot")
+    written: set[str] = set()
+    helper.apply_display(device, "off", written_off=written)
+    led = mounts / "PulseDot" / "LEDS.LED"
+    led.write_text("something else")
+    helper.apply_display(device, "off", written_off=written)
+    assert led.read_text() == "something else"
+
+
+def test_brightness_percent_maps_to_upstreams_0_to_255(home, mounts):
+    device = device_by_name("SidePulsePro")
+    helper.set_device_brightness(device, 40)
+    assert load_settings().brightness_for_device(device.id) == 102
+    helper.set_device_brightness(device, 100)
+    assert load_settings().brightness_for_device(device.id) == 255
+
+
+# Protocol: the helper as the widget runs it.
+
+class Helper:
+    def __init__(self, home: Path) -> None:
+        env = {
+            **os.environ,
+            "HOME": str(home / "home"),
+            "XDG_CONFIG_HOME": str(home / "config"),
+            "XDG_STATE_HOME": str(home / "state"),
+            "SIDEPULSE_MOUNT_ROOTS": str(home / "media"),
+        }
+        self.proc = subprocess.Popen(
+            [sys.executable, "-I", str(HELPER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env,
+        )
+        self.buffer = b""
+
+    def read_event(self, timeout: float = 15.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self.buffer:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("no event from the helper")
+            ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
+            if ready:
+                chunk = os.read(self.proc.stdout.fileno(), 65536)
+                if not chunk:
+                    raise EOFError("helper closed stdout")
+                self.buffer += chunk
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        return json.loads(line)
+
+    def event_matching(self, predicate, timeout: float = 15.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while True:
+            event = self.read_event(max(0.1, deadline - time.monotonic()))
+            if predicate(event):
+                return event
+
+    def send(self, obj: dict) -> None:
+        self.proc.stdin.write((json.dumps(obj) + "\n").encode())
+        self.proc.stdin.flush()
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=15)
+
+
+@pytest.fixture
+def helper_proc(home, mounts):
+    proc = Helper(home)
+    yield proc
+    proc.close()
+
+
+def test_devices_event_lists_the_mounted_products(helper_proc):
+    event = helper_proc.event_matching(lambda e: e["type"] == "devices")
+    by_name = {item["name"]: item for item in event["items"]}
+    assert by_name["SidePulsePro"]["kind"] == "pro"
+    assert by_name["SidePulsePro"]["led_count"] == 8
+    assert by_name["PulseDot"]["kind"] == "dot"
+    assert by_name["PulseDot"]["led_count"] == 2
+    assert by_name["PulseDot"]["display"] == "agent"
+    assert by_name["PulseDot"]["percent"] == 100
+
+
+def test_set_displays_off_then_agent_round_trips_through_the_helper(helper_proc, home):
+    dot_id = str(home / "media" / "PulseDot")
+    helper_proc.event_matching(lambda e: e["type"] == "devices")
+    helper_proc.send({"cmd": "set-displays", "displays": {dot_id: "off"}})
+    event = helper_proc.event_matching(lambda e: e["type"] == "devices" and any(
+        i["id"] == dot_id and i["display"] == "off" for i in e["items"]))
+    assert event is not None
+    assert upstream_entry(home, dot_id)["led_display"] == "custom"
+    assert (home / "media" / "PulseDot" / "LEDS.LED").read_text().strip() == off_program()
+    helper_proc.send({"cmd": "set-displays", "displays": {dot_id: "agent"}})
+    helper_proc.event_matching(lambda e: e["type"] == "devices" and any(
+        i["id"] == dot_id and i["display"] == "agent" for i in e["items"]))
+    assert upstream_entry(home, dot_id)["led_display"] == "agent"
+
+
+def test_set_brightness_writes_upstream_settings(helper_proc, home):
+    pro_id = str(home / "media" / "SidePulsePro")
+    helper_proc.event_matching(lambda e: e["type"] == "devices")
+    helper_proc.send({"cmd": "set-brightness", "device": pro_id, "percent": 40})
+    helper_proc.event_matching(lambda e: e["type"] == "devices" and any(
+        i["id"] == pro_id and i["percent"] == 40 for i in e["items"]))
+    assert upstream_entry(home, pro_id)["brightness"] == 102
+
+
+def test_unknown_display_is_refused_as_an_error(helper_proc):
+    helper_proc.event_matching(lambda e: e["type"] == "devices")
+    helper_proc.send({"cmd": "set-displays", "displays": {"x": "sparkles"}})
+    event = helper_proc.event_matching(lambda e: e["type"] == "error")
+    assert event["feature"] == "command"
+    assert "sparkles" in event["message"]

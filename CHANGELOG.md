@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.0...v0.9.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **helper:** show the charging pulse as soon as the charger is online ([#45](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/45)) ([1c8424c](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/1c8424cd00f533c58ac0022402becbaa984a32a2))
+
 ## [0.9.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.8.0...v0.9.0) (2026-10-11)
 
 

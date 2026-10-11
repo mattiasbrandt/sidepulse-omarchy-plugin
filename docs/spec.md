@@ -338,6 +338,9 @@ _Filled in during grilling, one entry per answered question._
 - **D18 Popup frame first (plan review):** #10 ships the popup itself, empty,
   keyboard-navigable, with its section layout; #4–#7 each fill one section and
   stay independent of each other.
+  *Amended in #7:* Keep awake is not a top-level section; its Policy row sits
+  inside Settings (after "Notify when a session asks"), so the popup's top
+  level holds only what changes while agents work: Setup, Sessions, Devices.
 - **D19 Setup state (plan review):** the icon stays visible with a distinct
   "needs setup" look; the popup's top section lists what's missing, in order:
   SidePulse not installed (show the install command), service stopped ("start
@@ -494,11 +497,11 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
      project (cwd basename), state, last message, age. Enter/click = D8.
   2. **Devices** — per device, drawn as its product with live LEDs (D21, D22):
      display Agent / Battery / Off (D9), brightness.
-  3. **Keep awake** — Never / When Agents Work / Always; shows holding state.
-  4. **Settings** (collapsible) — hooks per provider (status from doctor,
+  3. **Settings** (collapsible) — hooks per provider (status from doctor,
      toggle install/uninstall), Bar LEDs on/off, idle timeout, retention,
      hook log viewer (last N decision rows), "Notify when a session asks"
-     (D20), capability problems.
+     (D20), Keep awake (Never / When Agents Work / Always, with the holding
+     state and reason; D11), capability problems.
 - Bar LEDs (D7, D21) when `virtual_status_device_enabled` (upstream's SidePulse
   Notch setting, so it means the same on both).
 - IPC: `omarchy-shell shell toggle io.github.mattiasbrandt.sidepulse` opens the

@@ -10,8 +10,8 @@ import "helper/settings.mjs" as Settings
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
-// popup holds Setup (D19), Sessions, Devices, Keep awake (D11) and the
-// collapsible Settings section (D13).
+// popup holds Setup (D19), Sessions, Devices and the collapsible Settings
+// section (D13), which also holds Keep awake (D11, D18).
 Panel {
   id: root
 
@@ -93,7 +93,7 @@ Panel {
   readonly property var hookProviders: HelperProcess.hooks.map(function (entry) { return entry.provider })
   readonly property var settingRowNames: settingsOpen
     ? hookProviders.map(function (provider) { return "hook:" + provider })
-      .concat(["bar-leds", "idle", "retention", "notify"])
+      .concat(["bar-leds", "idle", "retention", "notify", "keep-awake"])
     : []
   // Upstream's values, as the helper last reported them; empty until the first report.
   readonly property bool barLedsOn: HelperProcess.settings !== null && HelperProcess.settings.bar_leds === true
@@ -162,7 +162,7 @@ Panel {
   readonly property var sessionRowNames: HelperProcess.sessions.length > 0
     ? HelperProcess.sessions.map(function (session, index) { return Sessions.sessionRow(index) })
     : ["sessions"]
-  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["keep-awake", "settings"], settingRowNames)
+  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["settings"], settingRowNames)
   // Battery joins with #11, offered only where there is a battery.
   readonly property var displayOrder: ["agent", "off"]
   readonly property var displayChoices: [
@@ -621,28 +621,6 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
-            PanelSectionHeader {
-              text: "KEEP AWAKE"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            // A stepped value, like the timeouts (D13): the chevrons and the wheel step the policy both ways.
-            // The detail says whether the sleep lock is held now and why; a failure to hold shows under PROBLEMS (D14).
-            SettingRow {
-              width: parent.width
-              rowName: "keep-awake"
-              stepper: true
-              settingLabel: "Policy"
-              settingDetail: Settings.awakeText(HelperProcess.awake)
-              settingValue: HelperProcess.awake !== null ? Settings.policyLabel(HelperProcess.awake.policy) : ""
-            }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(6)
-
             // Problems stay on show when the section is collapsed: a capability
             // that is off must not hide behind a closed header (D14).
             Column {
@@ -728,6 +706,19 @@ Panel {
                 settingDetail: "Off by default. Clicking the notice opens the session."
                 showSwitch: true
                 checked: root.notifyOnAsk
+              }
+
+              SubHeading { text: "KEEP AWAKE" }
+
+              // A stepped value, like the timeouts: the chevrons and the wheel step the policy both ways (D11).
+              // The detail says whether the sleep lock is held now and why; a failure to hold shows under PROBLEMS (D14).
+              SettingRow {
+                width: parent.width
+                rowName: "keep-awake"
+                stepper: true
+                settingLabel: "Policy"
+                settingDetail: Settings.awakeText(HelperProcess.awake)
+                settingValue: HelperProcess.awake !== null ? Settings.policyLabel(HelperProcess.awake.policy) : ""
               }
 
               SubHeading { text: "HOOK LOG" }

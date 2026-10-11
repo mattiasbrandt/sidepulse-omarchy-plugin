@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(scripts/live-check.sh *)"
+    ]
+  }
+}

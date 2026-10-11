@@ -1653,7 +1653,9 @@ class Helper:
             self.emit(event)
         self.session_statuses = statuses
         self.refresh_sessions(force)
-        self.frame_interval = frame_interval_for(self.mode) if self.state_readable else 1.0 / IDLE_FRAME_RATE
+        # frame_interval_for reads upstream names the Bar LEDs probe checks: only with that capability on (D14).
+        animated = self.state_readable and self.capabilities.get("bar_leds", {}).get("ok") is True
+        self.frame_interval = frame_interval_for(self.mode) if animated else 1.0 / IDLE_FRAME_RATE
         self.refresh_bar()
 
     def refresh_settings(self, settings: Any, force: bool = False) -> None:

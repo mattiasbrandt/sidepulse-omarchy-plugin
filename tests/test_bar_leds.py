@@ -342,6 +342,28 @@ def test_unreadable_state_shows_no_band(scratch):
     assert events == [{"type": "frame", "target": "bar", "leds": None}]
 
 
+def test_an_upstream_without_the_bar_led_names_keeps_the_rest_of_the_helper_running(scratch, monkeypatch):
+    """D14: a missing Bar LED name disables only the Bar LEDs. The State and keep-awake paths must not
+    import it, or the helper dies on the first tick (Codex review of #39)."""
+    import sidepulse.led_status
+
+    monkeypatch.delattr(sidepulse.led_status, "display_state_for_mode")
+    write_latest(scratch, "working")
+    write_settings(scratch, True)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    h.refresh_state()
+    h.refresh_awake()
+    h.pump_frames(1.0)
+    events = [json.loads(line) for line in out.getvalue().splitlines()]
+    kinds = {event["type"] for event in events}
+    assert "state" in kinds and "awake" in kinds, kinds
+    assert h.capabilities["bar_leds"]["ok"] is False
+    assert "display_state_for_mode" in h.capabilities["bar_leds"]["reason"]
+    assert any(e["type"] == "error" and e["feature"] == "bar_leds" for e in events)
+    assert frame_events(out) == []
+
+
 def test_missing_wasmtime_sends_no_frames_and_names_the_capability(scratch, monkeypatch):
     monkeypatch.setitem(sys.modules, "wasmtime", None)
     write_latest(scratch, "working")

@@ -32,7 +32,9 @@ Panel {
   readonly property bool needsSetup: setupRows.length > 0
 
   // Idle is muted; the other three states use upstream's colours.
-  readonly property color glyphColour: !agentState || agentState.state === "idle" ? dim : agentState.colour
+  readonly property color glyphColour: !agentState || agentState.state === "idle" || agentState.state === "unavailable"
+    ? dim
+    : agentState.colour
 
   readonly property string tooltipText: {
     if (HelperProcess.notInstalled) return "SidePulse: not installed"

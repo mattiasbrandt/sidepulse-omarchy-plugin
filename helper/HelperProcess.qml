@@ -52,11 +52,15 @@ Item {
 
   function unregister() {
     refs = Math.max(0, refs - 1)
-    if (refs === 0) stopTimer.restart()
+    if (refs === 0) {
+      // A restart still waiting out its backoff would outlive the last copy.
+      restartTimer.stop()
+      stopTimer.restart()
+    }
   }
 
   function ensureRunning() {
-    if (!proc.running) proc.running = true
+    if (refs > 0 && !proc.running) proc.running = true
   }
 
   // The helper ended. Registered copies mean it died on its own: restart after
@@ -64,6 +68,7 @@ Item {
   function processEnded() {
     helloReceived = false
     agentState = null
+    errors = {}  // the next helper re-reports what still fails
     if (refs > 0) {
       restartTimer.interval = backoffMs
       backoffMs = Math.min(backoffMs * 2, restartMaxMs)
@@ -98,6 +103,10 @@ Item {
       lastResult = event
     } else if (event.type === "error") {
       errors = Object.assign({}, errors, { [event.feature]: event.message })
+    } else if (event.type === "clear") {
+      const remaining = Object.assign({}, errors)
+      delete remaining[event.feature]
+      errors = remaining
     }
   }
 

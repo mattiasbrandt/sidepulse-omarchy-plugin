@@ -315,7 +315,8 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `hello` (protocol 1, helper version, upstream version, capabilities map with
   reasons), `state` (four-state label, colour, urgent for Ask, active_count,
   stale_count, top session), `setup` (missing items in order, D19), `result`
-  (outcome of a command), `error` (feature, message),
+  (outcome of a command), `error` (feature, message), `clear` (feature
+  recovered; *amended in #10*),
   `devices` (id, name, path, led_display, brightness, kind Dot/Pro, led count),
   `hooks` (doctor --json payload), `power` (battery %, plugged, lid),
   `awake` (holding bool, reason), `frame` (RGB per Bar LED),
@@ -326,6 +327,11 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `hooks-uninstall`, `open-session`. `open-session` answers with
   the D8 lookup state (stopped → resumed, live → focused or located,
   unresolved → explanation).
+  *Amended in #10:* while `latest.json` cannot be read, `state` is
+  `unavailable` (with a `reason`, shown dimmed) instead of the last good
+  state, and the `error` is cleared by a `clear` event once it reads again.
+  Each new helper re-reports what still fails, so the widget drops its
+  errors when the helper ends.
   *Amended in #10:* `state` and `setup` are re-sent on change, not on a fixed
   schedule. The helper re-runs the rules every second and re-checks setup every
   five seconds, so a stopped service or an unplugged device shows up without a

@@ -10,8 +10,8 @@ import "helper/settings.mjs" as Settings
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
-// popup holds Setup (D19), Sessions, Devices, Keep awake (still a placeholder
-// until #7) and the collapsible Settings section (D13).
+// popup holds Setup (D19), Sessions, Devices and the collapsible Settings
+// section (D13), which also holds Keep awake (D11, D18).
 Panel {
   id: root
 
@@ -93,7 +93,7 @@ Panel {
   readonly property var hookProviders: HelperProcess.hooks.map(function (entry) { return entry.provider })
   readonly property var settingRowNames: settingsOpen
     ? hookProviders.map(function (provider) { return "hook:" + provider })
-      .concat(["bar-leds", "idle", "retention", "notify"])
+      .concat(["bar-leds", "idle", "retention", "notify", "keep-awake"])
     : []
   // Upstream's values, as the helper last reported them; empty until the first report.
   readonly property bool barLedsOn: HelperProcess.settings !== null && HelperProcess.settings.bar_leds === true
@@ -145,6 +145,13 @@ Panel {
     saveEntry("notifyOnAsk", !notifyOnAsk)
   }
 
+  // Steps the keep-awake policy one choice in direction dx; the helper saves it through upstream (D11).
+  function stepPolicy(dx) {
+    if (HelperProcess.awake === null) return
+    const next = Settings.nextPolicy(HelperProcess.awake.policy, dx)
+    if (next !== HelperProcess.awake.policy) HelperProcess.setPolicy(next)
+  }
+
   // The Display each device was last set to, keyed by device id (D9). Stored in
   // this widget's shell.json entry; the helper re-derives upstream's value from it.
   readonly property var deviceDisplays: setting("deviceDisplays", ({}))
@@ -155,7 +162,7 @@ Panel {
   readonly property var sessionRowNames: HelperProcess.sessions.length > 0
     ? HelperProcess.sessions.map(function (session, index) { return Sessions.sessionRow(index) })
     : ["sessions"]
-  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["keep-awake", "settings"], settingRowNames)
+  readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["settings"], settingRowNames)
   // Battery joins with #11, offered only where there is a battery.
   readonly property var displayOrder: ["agent", "off"]
   readonly property var displayChoices: [
@@ -326,6 +333,8 @@ Panel {
       stepTiming(name, 1)
     } else if (name === "notify") {
       toggleNotify()
+    } else if (name === "keep-awake") {
+      stepPolicy(1)
     }
   }
 
@@ -337,6 +346,7 @@ Panel {
   function stepRow(name, dx) {
     if (name.indexOf("device:") === 0) nudgeBrightness(name.substring(7), dx)
     else if (name === "idle" || name === "retention") stepTiming(name, dx)
+    else if (name === "keep-awake") stepPolicy(dx)
   }
 
   Component.onCompleted: {
@@ -611,22 +621,6 @@ Panel {
             width: parent.width
             spacing: Style.space(6)
 
-            PanelSectionHeader {
-              text: "KEEP AWAKE"
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-            }
-
-            PlaceholderRow {
-              width: parent.width
-              rowName: "keep-awake"
-            }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(6)
-
             // Problems stay on show when the section is collapsed: a capability
             // that is off must not hide behind a closed header (D14).
             Column {
@@ -712,6 +706,19 @@ Panel {
                 settingDetail: "Off by default. Clicking the notice opens the session."
                 showSwitch: true
                 checked: root.notifyOnAsk
+              }
+
+              SubHeading { text: "KEEP AWAKE" }
+
+              // A stepped value, like the timeouts: the chevrons and the wheel step the policy both ways (D11).
+              // The detail says whether the sleep lock is held now and why; a failure to hold shows under PROBLEMS (D14).
+              SettingRow {
+                width: parent.width
+                rowName: "keep-awake"
+                stepper: true
+                settingLabel: "Policy"
+                settingDetail: Settings.awakeText(HelperProcess.awake)
+                settingValue: HelperProcess.awake !== null ? Settings.policyLabel(HelperProcess.awake.policy) : ""
               }
 
               SubHeading { text: "HOOK LOG" }

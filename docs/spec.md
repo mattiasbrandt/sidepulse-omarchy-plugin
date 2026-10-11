@@ -253,6 +253,22 @@ _Filled in during grilling, one entry per answered question._
   lock is **not** blocked. Never touches `omarchy toggle idle` (user's own
   global state). Laptop check: lid inhibitor only works where logind handles
   the lid switch — verify on the laptop.
+  *Amended in #7:* the predicate is upstream's `KeepAwakeController.should_hold_for_mode`
+  (the 300 s grace; the helper records `last_mode` as upstream's `update_requested`
+  does) plus upstream's battery safeguard, and the policy comes from
+  `sleep_prevention_policy` (`agents` is the default). The controller's caffeinate
+  child is macOS-bound and is not used. `status_bar.py` needs PyObjC, so
+  `awake_policy_should_hold`, `sleep_prevention_battery_safeguard` and
+  `format_percent_value` are copied, and `tests/test_keep_awake.py` fails when their
+  AST drifts from upstream. The lock is `systemd-inhibit --what=sleep:handle-lid-switch
+  --mode=block` wrapping `cat`, whose stdin the helper closes on release, so the
+  lock ends with the helper even when it is killed. A child that cannot start, or
+  dies while wanted, is reported in the popup (D14) and not restarted until the
+  request turns off. Battery: the first `/sys/class/power_supply` battery; an
+  online adapter or a charging battery is plugged in. An unreadable battery is
+  reported and counted as unknown (no safeguard), as upstream does. A failed read
+  of `latest.json` holds as `BLOCKED_ERROR`, as upstream's refresh error path does.
+  Lid state from logind is left to #11 with the other laptop display features.
 - **D12 Bar icon:** always shown. Muted when Idle; upstream state colours
   (Working #00AEEF, Done #22B14C, Ask #FF8A00) so the icon matches the
   physical LED; Ask also sets `active` (urgent highlight). Tooltip: state,
@@ -322,6 +338,9 @@ _Filled in during grilling, one entry per answered question._
 - **D18 Popup frame first (plan review):** #10 ships the popup itself, empty,
   keyboard-navigable, with its section layout; #4–#7 each fill one section and
   stay independent of each other.
+  *Amended in #7:* Keep awake is not a top-level section; its Policy row sits
+  inside Settings (after "Notify when a session asks"), so the popup's top
+  level holds only what changes while agents work: Setup, Sessions, Devices.
 - **D19 Setup state (plan review):** the icon stays visible with a distinct
   "needs setup" look; the popup's top section lists what's missing, in order:
   SidePulse not installed (show the install command), service stopped ("start
@@ -449,6 +468,14 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `systemd-inhibit --what=sleep:handle-lid-switch --mode=block` child while
   the predicate says hold; LED handover for battery/lid display (device to
   `custom`, write program, restore afterwards).
+  *Amended in #7:* the keep-awake part is in place: the `awake` event (`policy`,
+  `holding`, `reason`; re-sent on change, the predicate re-runs every tick), the
+  `set-policy` command (`policy`: never, agents, always; saved through upstream's
+  `with_sleep_prevention_policy`), and the `keep_awake` capability (upstream's
+  controller and settings names plus `systemd-inhibit` on PATH). The `power` event
+  and the lid state wait for #11, since no popup row needs them yet; the battery
+  feeds the safeguard, and its problems come as `error` with feature `power`.
+  Tests put a fake `systemd-inhibit` on PATH (`tests/conftest.py`).
 - **Capability probe (D14)** at start; each feature independently on/off with
   a reason. No silent fallbacks.
 - Exits when stdin closes (shell gone) and releases the inhibitor and any
@@ -470,11 +497,11 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
      project (cwd basename), state, last message, age. Enter/click = D8.
   2. **Devices** — per device, drawn as its product with live LEDs (D21, D22):
      display Agent / Battery / Off (D9), brightness.
-  3. **Keep awake** — Never / When Agents Work / Always; shows holding state.
-  4. **Settings** (collapsible) — hooks per provider (status from doctor,
+  3. **Settings** (collapsible) — hooks per provider (status from doctor,
      toggle install/uninstall), Bar LEDs on/off, idle timeout, retention,
      hook log viewer (last N decision rows), "Notify when a session asks"
-     (D20), capability problems.
+     (D20), Keep awake (Never / When Agents Work / Always, with the holding
+     state and reason; D11), capability problems.
 - Bar LEDs (D7, D21) when `virtual_status_device_enabled` (upstream's SidePulse
   Notch setting, so it means the same on both).
 - IPC: `omarchy-shell shell toggle io.github.mattiasbrandt.sidepulse` opens the

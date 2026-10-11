@@ -39,8 +39,9 @@ stopped service (Start service runs `sidepulse service start`), or a device.
 
 Click the SidePulse icon in the bar to open the popup. `j` and `k` (or the arrow
 keys) move the highlight, Enter runs the highlighted action, `r` refreshes, and
-Esc or a click outside closes it. Settings (#6) and keep-awake (#7) stay empty
-until their slices land. A keybind for the popup lands in #12.
+Esc or a click outside closes it. Settings opens on Enter or a click: agent
+hooks, Bar LEDs, the timeouts, the Ask notice, the Keep awake policy and the
+hook log. A keybind for the popup lands in #12.
 
 Sessions lists up to ten recent agent sessions, newest and most urgent first.
 Enter or a click on one jumps to it: a session that is running focuses its
@@ -66,8 +67,10 @@ afterwards set its `led_display` back to `agent` in
 - `xdg-terminal-exec` (your default terminal) to resume a stopped session, and
   `hyprctl`, which Omarchy ships, to raise a session's window. Optional: `herdr`
   or `tmux`, when your agents run inside one.
+- `systemd-inhibit` (systemd, which Omarchy ships) for keep-awake (D11). Without
+  it the Keep awake policy cannot hold sleep and the popup says why.
 - Later slices add their own requirements here: `wasmtime` in the SidePulse
-  venv for the Bar LEDs (#8) and `systemd-inhibit` for keep-awake (#7).
+  venv for the Bar LEDs (#8).
 
 ## Remove
 
@@ -107,7 +110,14 @@ Plugins run unsandboxed inside `omarchy-shell`. The plugin:
   LEDs switch) through SidePulse's own settings code;
 - runs `notify-send` (libnotify) for each notice when a session asks, only
   while "Notify when a session asks" is on, and opens the session when you click
-  the notice.
+  the notice;
+- holds a sleep lock while the Keep awake policy says so: it runs
+  `systemd-inhibit --what=sleep:handle-lid-switch --mode=block` (a `cat` child
+  that ends with the helper), so the machine does not suspend or sleep on lid
+  close. Screen lock and idle are not blocked, and no idle setting changes. It
+  reads the battery from `/sys/class/power_supply` to release the lock when it
+  is unplugged and below SidePulse's threshold (20 % by default), and saves the
+  policy in SidePulse's `settings.json` (`sleep_prevention_policy`).
 
 It makes no network calls and needs no sudo. The list grows with each feature
 and is complete at #12.

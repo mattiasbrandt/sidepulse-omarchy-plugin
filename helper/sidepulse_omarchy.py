@@ -20,8 +20,11 @@ Events (stdout):
   settings  idle timeout, session retention and the Bar LEDs switch (upstream's)
   result    outcome of a command: start-service, hooks-install, hooks-uninstall,
             open-session
+  awake     the keep-awake policy (never, agents, always), whether the sleep lock
+            is held now, and why (D11)
 
 Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"},
+{"cmd": "set-policy", "policy": "never" | "agents" | "always"} (D11),
 {"cmd": "set-displays", "displays": {device id: display}} (the widget's full
 remembered map; the helper reconciles every connected device to it, D9), and
 {"cmd": "set-brightness", "device": id, "percent": 0-100},
@@ -128,10 +131,33 @@ REQUIRED_NAMES = {
     "settings": {
         "sidepulse.settings": ("load_settings", "save_settings",
                                "AgentMonitorSettings.with_agent_list_timing",
-                               "AgentMonitorSettings.with_virtual_status_device"),
+                               "AgentMonitorSettings.with_virtual_status_device",
+                               "AgentMonitorSettings.with_sleep_prevention_policy"),
+    },
+    # The sleep lock's predicate (D11): upstream's controller, its grace and the battery reader's type.
+    # The systemd-inhibit binary is probed separately, in probe_capabilities.
+    "keep_awake": {
+        "sidepulse.keep_awake": ("KeepAwakeController", "KeepAwakeController.should_hold_for_mode",
+                                 "AWAKE_GRACE_SECONDS", "format_duration"),
+        "sidepulse.battery": ("BatterySnapshot",),
+        "sidepulse.settings": ("load_settings", "SLEEP_PREVENTION_CHOICES"),
     },
 }
 WASMTIME_REASON = "wasmtime is not installed in the SidePulse venv; the Bar LEDs need it"
+
+# Keep awake (D11). The policy values are upstream's settings values; tests/test_keep_awake.py checks them.
+SLEEP_PREVENTION_NEVER = "never"
+SLEEP_PREVENTION_AGENTS = "agents"
+SLEEP_PREVENTION_ALWAYS = "always"
+SLEEP_PREVENTION_CHOICES = (SLEEP_PREVENTION_NEVER, SLEEP_PREVENTION_AGENTS, SLEEP_PREVENTION_ALWAYS)
+POWER_SUPPLY_ROOT = Path("/sys/class/power_supply")
+INHIBIT_WHAT = "sleep:handle-lid-switch"
+INHIBIT_WHO = "SidePulse"
+INHIBIT_WHY = "Keeping the machine awake while agents work"
+INHIBIT_REASON = "systemd-inhibit is not installed; keeping the machine awake needs it (systemd)"
+NO_AGENT = "no agent is working"
+# Upstream's modes that hold at once; the finished ones (completed, ask, error) hold for the grace.
+WORKING_MODE_VALUES = frozenset({"working", "tool_running", "long_task_progress"})
 
 IN_MOVED_TO = 0x80
 IN_CLOSE_WRITE = 0x08
@@ -156,9 +182,17 @@ def probe_capabilities() -> dict[str, dict[str, Any]]:
     caps: dict[str, dict[str, Any]] = {}
     for feature, modules in REQUIRED_NAMES.items():
         caps[feature] = _probe_names(modules)
+    if caps["keep_awake"]["ok"]:
+        caps["keep_awake"] = _probe_inhibit()
     caps["bar_leds"] = _probe_wasmtime()
     caps["notify"] = _probe_notify()
     return caps
+
+
+def _probe_inhibit() -> dict[str, Any]:
+    if shutil.which(inhibit_argv()[0]) is None:
+        return {"ok": False, "reason": INHIBIT_REASON}
+    return {"ok": True, "reason": ""}
 
 
 def _probe_names(modules: dict[str, tuple[str, ...]]) -> dict[str, Any]:
@@ -1105,6 +1139,191 @@ def sessions_event(statuses: list[Any]) -> dict[str, Any]:
     return {"type": "sessions", "items": items}
 
 
+# --- Keep awake (D11) ---
+
+def awake_policy_should_hold(policy: str, *, agents_active: bool) -> bool:
+    # Copied from upstream status_bar.py (PyObjC, not importable here); tests/test_keep_awake.py compares the AST.
+    if policy == SLEEP_PREVENTION_ALWAYS:
+        return True
+    if policy == SLEEP_PREVENTION_AGENTS:
+        return agents_active
+    return False
+
+
+def sleep_prevention_battery_safeguard(
+    snapshot: BatterySnapshot | None,
+    threshold_percent: float,
+) -> tuple[bool, str]:
+    # Copied from upstream status_bar.py; tests/test_keep_awake.py compares the AST.
+    threshold = max(0.0, min(100.0, float(threshold_percent)))
+    threshold_text = format_percent_value(threshold)
+    if threshold <= 0:
+        return False, "disabled"
+    if snapshot is None:
+        return False, f"battery unknown, threshold {threshold_text}"
+    if not snapshot.battery_present:
+        return False, f"no battery, threshold {threshold_text}"
+    battery_text = format_percent_value(snapshot.percent)
+    if snapshot.is_plugged:
+        return False, f"battery {battery_text}, plugged in, threshold {threshold_text}"
+    if snapshot.percent < threshold:
+        return True, f"battery {battery_text}, threshold {threshold_text}"
+    return False, f"battery {battery_text}, threshold {threshold_text}"
+
+
+def format_percent_value(value: float | int) -> str:
+    # Copied from upstream status_bar.py; tests/test_keep_awake.py compares the AST.
+    number = float(value)
+    if number.is_integer():
+        return f"{int(number)}%"
+    return f"{number:.1f}%"
+
+
+def _sysfs(path: Path) -> str:
+    return path.read_text().strip()
+
+
+def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
+    """Upstream's BatterySnapshot from /sys/class/power_supply (D10).
+
+    The first battery gives the percent. An online supply that is not a battery
+    (an adapter) or a charging battery means plugged in. No directory or no
+    battery is a snapshot with battery_present False. An unreadable file raises.
+    """
+    from sidepulse.battery import BatterySnapshot
+
+    if not root.is_dir():
+        return BatterySnapshot(battery_present=False)
+    batteries: list[Path] = []
+    plugged = False
+    for supply in sorted(root.iterdir()):
+        if _sysfs(supply / "type") == "Battery":
+            present = supply / "present"
+            if not present.exists() or _sysfs(present) == "1":
+                batteries.append(supply)
+        elif (supply / "online").exists() and _sysfs(supply / "online") == "1":
+            plugged = True
+    if not batteries:
+        return BatterySnapshot(battery_present=False, is_plugged=plugged)
+    battery = batteries[0]
+    status = _sysfs(battery / "status")
+    charging = status == "Charging"
+    full = status == "Full"
+    return BatterySnapshot(
+        percent=int(_sysfs(battery / "capacity")),
+        is_charging=charging,
+        is_charged=full,
+        is_plugged=plugged or charging or full,
+        battery_present=True,
+    )
+
+
+def agents_awake(controller: Any, mode: Any, now: float) -> tuple[bool, str]:
+    """Whether the agents hold sleep now, and why in words: upstream's should_hold_for_mode (300 s grace)."""
+    if mode is None:
+        return False, NO_AGENT
+    active = controller.should_hold_for_mode(mode, now)
+    # should_hold_for_mode compares with the previous mode; upstream records it in update_requested.
+    controller.last_mode = mode
+    if not active:
+        return False, NO_AGENT
+    if mode.value in WORKING_MODE_VALUES:
+        return True, "agents are working"
+    from sidepulse.keep_awake import format_duration
+
+    return True, f"{format_duration(int(controller.grace_until_monotonic - now))} grace after an agent finished"
+
+
+def awake_request(policy: str, *, agents_active: bool, agents_reason: str, battery: Any,
+                  threshold: float) -> tuple[bool, str]:
+    """Whether to hold sleep, and why: the policy, then the battery safeguard (upstream's sync_keep_awake)."""
+    if policy == SLEEP_PREVENTION_NEVER:
+        return False, "never"
+    safeguard_active, text = sleep_prevention_battery_safeguard(battery, threshold)
+    if not awake_policy_should_hold(policy, agents_active=agents_active):
+        return False, NO_AGENT
+    if safeguard_active:
+        return False, f"battery safeguard, {text}"
+    return True, "always" if policy == SLEEP_PREVENTION_ALWAYS else agents_reason
+
+
+def inhibit_argv() -> list[str]:
+    """The command that takes the sleep lock (D11).
+
+    systemd-inhibit holds the lock while `cat` runs. `cat` ends when its stdin
+    closes, which the helper does on release and the kernel does when the helper
+    dies, so the lock cannot outlive the helper.
+    """
+    return ["systemd-inhibit", f"--what={INHIBIT_WHAT}", "--mode=block", f"--who={INHIBIT_WHO}",
+            f"--why={INHIBIT_WHY}", "cat"]
+
+
+class SleepInhibitor:
+    """The sleep lock: one systemd-inhibit child while it is wanted, none otherwise (D11)."""
+
+    def __init__(self, argv: Callable[[], list[str]] | None = None) -> None:
+        self.argv = argv
+        self.proc: subprocess.Popen | None = None
+        self.err: Any = None
+        # Why the lock could not be held, kept while it is still wanted, so a failing command is not started every tick.
+        self.failed: str | None = None
+
+    def holding(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def update(self, wanted: bool) -> str | None:
+        """Take or drop the lock to match `wanted`. Returns why it is not held, or None."""
+        if not wanted:
+            self.release()
+            self.failed = None
+            return None
+        if self.holding():
+            return None
+        if self.proc is not None:
+            self.failed = self._ended()
+        elif self.failed is None:
+            self.failed = self._start()
+        return self.failed
+
+    def _start(self) -> str | None:
+        command = self.argv() if self.argv is not None else inhibit_argv()
+        # stderr goes to a file, not a pipe nobody reads: a child that writes a lot must not block.
+        err = tempfile.TemporaryFile()
+        try:
+            self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err)
+        except OSError as exc:
+            err.close()
+            return f"cannot run systemd-inhibit: {exc}"
+        self.err = err
+        return None
+
+    def _ended(self) -> str:
+        """The child ended while the lock was wanted: say how (D14)."""
+        proc, err = self.proc, self.err
+        self.proc = None
+        self.err = None
+        code = proc.wait()
+        err.seek(0)
+        said = err.read().decode(errors="replace").strip().splitlines()
+        err.close()
+        return f"systemd-inhibit exited {code}" + (f": {said[-1]}" if said else "")
+
+    def release(self) -> None:
+        """Drop the lock: closing stdin ends `cat`, and systemd-inhibit with it."""
+        proc, err = self.proc, self.err
+        self.proc = None
+        self.err = None
+        if proc is None:
+            return
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=COMMAND_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        err.close()
+
+
 class Helper:
     def __init__(self, out: TextIO) -> None:
         self.out = out
@@ -1133,6 +1352,14 @@ class Helper:
         self.notify_on_ask = False
         self.asking: set[tuple[str, str]] | None = None
         self.notifications: list[tuple[tuple[str, str], subprocess.Popen, Any]] = []
+        # Keep awake (D11): the agents' State as the last read saw it (None without a read), the lock,
+        # the predicate's grace clock and the battery's sysfs root. The clock and root are injectable for tests.
+        self.mode: Any = None
+        self.inhibitor = SleepInhibitor()
+        self.awake_controller: Any = None
+        self.last_awake: dict[str, Any] | None = None
+        self.power_root = POWER_SUPPLY_ROOT
+        self.clock: Callable[[], float] = time.monotonic
 
     def emit(self, event: dict[str, Any]) -> None:
         self.out.write(json.dumps(event, separators=(",", ":")) + "\n")
@@ -1190,9 +1417,14 @@ class Helper:
             message = f"cannot read {self.latest_path}: {exc}"
             self.report("state", message)
             event = unavailable_state_event(message)
+            # Upstream's refresh error path holds sleep as if an agent had errored (status_bar.py refresh_).
+            from sidepulse.models import AgentMode
+
+            self.mode = AgentMode.BLOCKED_ERROR
         else:
             self.resolve("state")
             event = state_event(snapshot)
+            self.mode = snapshot.aggregate.mode
             if self.capabilities["sessions"]["ok"]:
                 statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
             self.note_asks(asking_sessions(snapshot.statuses))
@@ -1317,10 +1549,70 @@ class Helper:
 
     def refresh(self, force: bool = False) -> None:
         self.refresh_state(force)
+        self.refresh_awake()
         self.refresh_devices(force)
         self.refresh_setup(force)
         self.refresh_hooks(force)
         self.refresh_log(force)
+
+    # --- Keep awake (D11) ---
+
+    def refresh_awake(self) -> None:
+        """Hold or release the sleep lock to match the policy, and report what it does."""
+        from sidepulse.settings import load_settings
+
+        settings = load_settings()
+        policy = settings.sleep_prevention_policy
+        if self.capabilities.get("keep_awake", {}).get("ok"):
+            if self.awake_controller is None:
+                from sidepulse.keep_awake import KeepAwakeController
+
+                self.awake_controller = KeepAwakeController()
+            agents_active, agents_reason = agents_awake(self.awake_controller, self.mode, self.clock())
+            hold, reason = awake_request(
+                policy,
+                agents_active=agents_active,
+                agents_reason=agents_reason,
+                battery=self.read_battery_or_none(),
+                threshold=settings.sleep_prevention_min_battery_percent,
+            )
+        else:
+            hold, reason = False, "keep awake is unavailable"
+        error = self.inhibitor.update(hold)
+        if error is None:
+            self.resolve("keep_awake")
+        else:
+            self.report("keep_awake", error)
+        event = {"type": "awake", "policy": policy, "holding": self.inhibitor.holding(), "reason": reason}
+        if event != self.last_awake:
+            self.last_awake = event
+            self.emit(event)
+
+    def read_battery_or_none(self) -> Any:
+        """The battery for the safeguard. Unreadable is reported (D14) and counts as unknown, as upstream does."""
+        try:
+            battery = read_battery(self.power_root)
+        except (OSError, ValueError) as exc:
+            self.report("power", f"cannot read the battery: {exc}")
+            return None
+        self.resolve("power")
+        return battery
+
+    def set_policy(self, command: dict[str, Any]) -> None:
+        """Save the keep-awake policy through upstream's settings (D11, D13), then apply it."""
+        if not self.capabilities.get("settings", {}).get("ok"):
+            self.error("settings", "the settings are unavailable: " + self.capabilities.get("settings", {}).get("reason", ""))
+            return
+        policy = command.get("policy")
+        if policy not in SLEEP_PREVENTION_CHOICES:
+            self.error("command", "set-policy needs policy: never, agents or always")
+            return
+        try:
+            change_settings(lambda s: s.with_sleep_prevention_policy(policy))
+        except (OSError, ValueError) as exc:
+            self.error("settings", f"cannot save the keep-awake policy: {exc}")
+            return
+        self.refresh_awake()
 
     def set_agent_list(self, command: dict[str, Any]) -> None:
         if not self.capabilities.get("settings", {}).get("ok"):
@@ -1535,6 +1827,8 @@ class Helper:
             self.set_bar_leds(command)
         elif name == "set-notify":
             self.set_notify(command)
+        elif name == "set-policy":
+            self.set_policy(command)
         else:
             self.error("command", f"unknown command {name!r}")
 
@@ -1545,6 +1839,7 @@ class Helper:
             self.loop(stdin_fd)
         finally:
             self.close_notifications()
+            self.inhibitor.release()
 
     def loop(self, stdin_fd: int) -> None:
         while True:
@@ -1575,6 +1870,7 @@ class Helper:
                 self.refresh_state()
             self.ticks += 1
             self.refresh_state()  # re-run the rules so ages and staleness advance
+            self.refresh_awake()  # the grace runs out with the clock, not with a write
             self.refresh_devices()
             if self.ticks % SETUP_EVERY_TICKS == 0:
                 self.refresh_setup()

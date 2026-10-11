@@ -9,14 +9,15 @@ import sidepulse_omarchy as helper
 
 
 def test_everything_present_in_the_test_environment_is_reported_ok(tmp_path, monkeypatch):
-    # notify-send is a system tool CI runners may lack: the test brings its own.
-    tool = tmp_path / "notify-send"
-    tool.write_text("#!/bin/sh\n")
-    tool.chmod(0o755)
+    # notify-send and systemd-inhibit are system tools CI runners may lack: the test brings its own.
+    for name in ("notify-send", "systemd-inhibit"):
+        tool = tmp_path / name
+        tool.write_text("#!/bin/sh\n")
+        tool.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
     caps = helper.probe_capabilities()
     assert set(caps) == {"state", "sessions", "service", "devices", "bar_leds", "hooks", "hook_log",
-                         "settings", "notify"}
+                         "settings", "notify", "keep_awake"}
     for name, cap in caps.items():
         assert cap["ok"] is True, f"{name}: {cap['reason']}"
         assert cap["reason"] == ""

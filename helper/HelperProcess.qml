@@ -42,6 +42,8 @@ Item {
   property var hooks: []
   property var hookLog: []
   property var settings: null
+  // The keep-awake policy, whether the sleep lock is held and why (D11); null until the helper reports.
+  property var awake: null
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -84,6 +86,7 @@ Item {
     hooks = []
     hookLog = []
     settings = null
+    awake = null
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -106,6 +109,8 @@ Item {
   function setAgentList(timing) { send(Object.assign({ cmd: "set-agent-list" }, timing)) }
   function setBarLeds(enabled) { send({ cmd: "set-bar-leds", enabled: enabled }) }
   function setNotify(enabled) { send({ cmd: "set-notify", enabled: enabled }) }
+  // Keep awake (D11): never, agents (when agents work) or always; saved through upstream's settings.
+  function setPolicy(policy) { send({ cmd: "set-policy", policy: policy }) }
 
   function handleLine(line) {
     if (line.trim() === "") return
@@ -134,6 +139,8 @@ Item {
       hookLog = event.rows
     } else if (event.type === "settings") {
       settings = event
+    } else if (event.type === "awake") {
+      awake = event
     } else if (event.type === "result") {
       lastResult = event
     } else if (event.type === "error") {

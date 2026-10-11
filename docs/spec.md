@@ -182,7 +182,9 @@ _Filled in during grilling, one entry per answered question._
   per bar window: the first copy of the widget that asks for it holds it
   (`HelperProcess.wantBand`). The position comes from the window, so which copy
   holds it does not show. A left or right bar draws nothing and the Settings row
-  says so.
+  says so. The band sits below the bar's widgets (negative `z`, above the
+  window's background colour), so marks the bar draws on the same edge, such as
+  the open-popup line under a centre widget, stay visible on top of it.
 - **D8 Session click:** focus the terminal window of the process that
   provably runs the session; resume (user's default terminal via
   `xdg-terminal-exec`, in the session cwd, upstream's resume command) only
@@ -404,6 +406,9 @@ _Filled in during grilling, one entry per answered question._
   apply to them: they follow the State even when a device is Off. Each device row
   plays the program its device holds (`LEDS.LED`) through its own engine at the
   device's LED count, so an Off device shows dark and a Pro shows its own frames.
+  The row plays it at full brightness: it undoes upstream's `apply_brightness`
+  scaling by the device's brightness, since a screen pixel at a few percent is
+  black where a real LED still shines; the brightness slider shows the brightness.
   Those frames flow only while a popup is open (the `set-popup` gate, below).
   The device's file is read on each tick, so a change of program reaches the row
   within a second; its animation frames run live.

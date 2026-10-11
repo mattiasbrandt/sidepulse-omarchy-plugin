@@ -138,9 +138,10 @@ Panel {
     }
   }
 
+  // The one sender of the notice setting to the helper is onNotifyOnAskChanged: saving
+  // updates notifyOnAsk synchronously, so reading it again here would see the new value.
   function toggleNotify() {
     saveEntry("notifyOnAsk", !notifyOnAsk)
-    HelperProcess.setNotify(!notifyOnAsk)
   }
 
   // The Display each device was last set to, keyed by device id (D9). Stored in

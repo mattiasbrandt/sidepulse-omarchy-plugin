@@ -108,6 +108,11 @@ _Filled in during grilling, one entry per answered question._
     So the singleton refcounts widget copies and stops the helper when the
     count stays at 0 (debounced — a reload drops it to 0 and back within
     milliseconds), and restarts it when a copy registers again.
+  - *Live check on #10:* `omarchy plugin add`, `update` and `enable` only
+    rescan, so after an update the new widget runs against the old singleton;
+    on a shell that had loaded an older copy, the widget started no helper at
+    all. Installing or updating needs `omarchy restart shell` (README), and
+    `scripts/live-check.sh` restarts the shell on every install.
   - Edits to the singleton's own QML do **not** hot-reload (old code kept
     running until `omarchy restart shell`). Keep the singleton a thin process
     owner and line dispatcher; logic lives in the helper and in ordinary

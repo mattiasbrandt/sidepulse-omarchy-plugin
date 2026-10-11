@@ -15,6 +15,7 @@ on:
 
 permissions:
   pull-requests: read
+  issues: read
 
 jobs:
   conventional-title:
@@ -75,3 +76,34 @@ jobs:
             echo "::error::Merging this PR would close the parent issue #$PARENT. Use a plain branch and write 'Refs #$PARENT'; keep close/fix/resolve away from its number."
             exit 1
           fi
+
+  finished-issues:
+    name: closes only finished issues
+    # An issue's acceptance boxes are its definition of done. Merging #24 closed
+    # #10 through `Fixes #10` with six boxes still open, since GitHub closes on
+    # merge whatever the boxes say. Every issue this PR would close (keyword or
+    # linked branch) must have every box ticked; otherwise write 'Refs #<n>'.
+    # Ticking a box does not re-trigger this check: re-run it afterwards.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Check the acceptance boxes of the issues this PR would close
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          closes=$(gh pr view "$PR" --repo "$REPO" --json closingIssuesReferences \
+            --jq '.closingIssuesReferences[].number')
+          echo "This PR closes: ${closes:-nothing}"
+          failed=0
+          for issue in $closes; do
+            unticked=$(gh issue view "$issue" --repo "$REPO" --json body --jq '.body' \
+              | grep -E '^[[:space:]]*[-*] \[ \] ' || true)
+            if [ -n "$unticked" ]; then
+              echo "::error::Merging this PR would close #$issue with acceptance boxes still open. Deliver and tick them (then re-run this check), or write 'Refs #$issue'."
+              printf '%s\n' "$unticked"
+              failed=1
+            fi
+          done
+          exit "$failed"

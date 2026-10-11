@@ -84,6 +84,11 @@ verification ticket's laptop checklist (#9).
   Conventional Commit typed by what the change means for a user (`feat`,
   `fix`, `!` for breaking), not by the files touched. The body says
   `Fixes #<n>`.
+- **An issue closes only with every acceptance box ticked.** The merge of a
+  linked branch or a `Fixes #<n>` closes it whatever the boxes say, and the
+  `closes only finished issues` check blocks that. A box you could not
+  deliver is reported, not left for the merge to close: the PR waits, and
+  work outside the issue's branch writes `Refs #<n>`.
 - Branch commits: imperative subject, body says why; Conventional form
   welcome, not required. No tool or model attribution trailers.
 - release-please owns `CHANGELOG.md`, `manifest.json`'s `version`,

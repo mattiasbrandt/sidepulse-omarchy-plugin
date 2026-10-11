@@ -10,6 +10,10 @@ work is tracked as sub-issues of [#1](https://github.com/mattiasbrandt/sidepulse
 2. Commit on the branch however suits the work.
 3. Open a PR whose **title is a Conventional Commit** (below) and whose body says
    `Fixes #<n>`. CI and the PR-title check must pass.
+   The merge closes the issue (the branch is linked to it), so every
+   acceptance box on the issue is ticked before the merge; the
+   `closes only finished issues` check fails while one is open. Ticking a
+   box does not re-run it: re-run the check afterwards.
 4. The PR is **squash-merged**: its title becomes the one commit on `main`, with
    an empty body. That commit is what versioning reads, so the title has to say
    what the change means for users.

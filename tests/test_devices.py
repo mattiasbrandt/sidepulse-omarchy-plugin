@@ -136,7 +136,7 @@ def test_a_remembered_display_the_helper_does_not_offer_falls_back_to_agent():
 def test_a_device_left_manual_by_a_crash_is_repaired_to_agent(home, mounts):
     device = device_by_name("PulseDot")
     # The helper died mid-takeover: upstream says custom, nothing is remembered.
-    helper.save_device_settings(
+    helper.change_settings(
         lambda s: s.with_device_display(device.id, "custom", name=device.name, path=device.path))
     helper.apply_display(device, helper.display_of({}, device.id))
     assert load_settings().display_for_device(device.id) == "agent"

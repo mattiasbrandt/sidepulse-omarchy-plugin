@@ -61,6 +61,8 @@ afterwards set its `led_display` back to `agent` in
 - SidePulse at upstream commit `6d55225fed20a82521b23d86a4df2c4a15dff295`, the
   commit the plugin is tested against. The helper runs under that install's
   Python.
+- `notify-send` (libnotify) for the Ask notices (D20), optional: without it
+  the notices are off and the popup says why.
 - `xdg-terminal-exec` (your default terminal) to resume a stopped session, and
   `hyprctl`, which Omarchy ships, to raise a session's window. Optional: `herdr`
   or `tmux`, when your agents run inside one.
@@ -94,7 +96,18 @@ Plugins run unsandboxed inside `omarchy-shell`. The plugin:
 - runs `hyprctl` to list and raise windows, and `herdr` or `tmux` to find and
   select a session's pane, and starts `xdg-terminal-exec` to open a terminal
   that resumes a session or attaches to a multiplexer, only when you choose a
-  session in the popup.
+  session in the popup;
+- runs `sidepulse agent-monitor install|uninstall <agent>` in the SidePulse
+  venv when you switch an agent's hooks in the Settings section. That edits the
+  agent's own config (`~/.claude/settings.json`, `~/.codex/config.toml`,
+  `~/.grok/hooks/`, `~/.cursor/hooks.json`, `~/.junie/config.json`) through
+  SidePulse's CLI, which also writes backups beside them;
+- reads SidePulse's hook log (`event-status.jsonl`) for the Settings section;
+- writes SidePulse's `settings.json` (idle timeout, session retention, the Bar
+  LEDs switch) through SidePulse's own settings code;
+- runs `notify-send` (libnotify) for each notice when a session asks, only
+  while "Notify when a session asks" is on, and opens the session when you click
+  the notice.
 
 It makes no network calls and needs no sudo. The list grows with each feature
 and is complete at #12.

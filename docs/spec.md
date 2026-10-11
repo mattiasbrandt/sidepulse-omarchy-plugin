@@ -277,6 +277,22 @@ _Filled in during grilling, one entry per answered question._
   (a newer upstream's, hand-added ones) are dropped. The helper keeps that
   behaviour, as upstream's own CLI does; it only refuses to save over a file
   that is not a JSON object.
+  *Amended in #6:* the Settings section (collapsed until opened) holds the hook
+  switch per agent (`hooks` event: upstream's `detect_provider_configs`, the
+  payload `agent-monitor doctor --json` prints; the switch runs the
+  `agent-monitor install|uninstall <agent>` CLI, the only writer of agent
+  configs; "on" means SidePulse's own hooks are installed: the helper's
+  `installed` is upstream's log paths, which only SidePulse's hooks carry. An
+  unrelated hook on a known event shows "Other hooks only" and is not counted),
+  Bar LEDs (`virtual_status_device_enabled` through
+  `with_virtual_status_device`; the helper does not register upstream's Notch
+  device the way the Mac app does, since that would list it in `devices[]`),
+  idle timeout and session retention (`with_agent_list_timing`; refused when
+  negative or non-numeric, because upstream clamps those to 0 silently), the Ask
+  notice (D20) and the last hook decisions (`event-status.jsonl`, read from the
+  end). Problems (D14) sit above the section header, visible when it is
+  collapsed. Presets are in upstream's units: idle 15 min to 4 h, retention 1 h
+  to 7 days (`helper/settings.mjs`).
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.
@@ -319,7 +335,14 @@ _Filled in during grilling, one entry per answered question._
   is reported by the shell, since no helper can run there.
 - **D20 Ask notification (plan review):** opt-in setting "Notify when a
   session asks", off by default; clicking the notification jumps to the
-  session (D8). Beyond Mac parity: the Mac app sends no agent notifications.
+  session (D8). Beyond Mac parity: the Mac app sends no agent notifications. *Amended in #6:*
+  the helper runs `notify-send --wait --action=default=Open session` for each
+  session that enters Ask (once per entry, none for sessions already asking when
+  it starts, none while the switch is off). Omarchy's notification server
+  invokes a libnotify `default` action only while the sender is alive, so the
+  notice's exit is the signal: a click prints `default` and opens the session
+  through the D8 path; a dismissed notice opens nothing; a non-zero exit is
+  reported in the popup (D14). The helper ends any notice still up when it exits.
 - **D21 The look follows the product (plan review):** popup device rows draw
   a SidePulse Dot (2 LEDs) or SidePulse Pro (8 LEDs) lit live; the Bar LEDs
   match the connected product (2 or 8; 8 with none or both, since upstream
@@ -355,6 +378,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   ├── lifecycle.mjs    refcount, debounced stop, restart backoff as pure
 │   │                    functions (*amended in #28*)
 │   ├── sessions.mjs     the Sessions rows' age, provider label and cursor name (*added in #4*)
+│   ├── settings.mjs     the Settings section's presets, hook and log wording (*added in #6*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
@@ -377,7 +401,9 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   count, remembered Display, brightness percent; sent on change),
   `hooks` (doctor --json payload), `power` (battery %, plugged, lid),
   `awake` (holding bool, reason), `frame` (RGB per Bar LED),
-  `log` (recent hook decision rows).
+  `log` (recent hook decision rows). *Amended in #6:* `settings` (idle timeout,
+  retention, Bar LEDs switch); `hooks` and `log` are re-sent on refresh and every
+  five ticks; `result` also answers `hooks-install` and `hooks-uninstall`.
   Stdin commands: `refresh`, `start-service` (*amended in #10*: `setup` and
   `result` are new), `set-displays`, `set-brightness`, `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
   `hooks-uninstall`, `open-session`. `open-session` answers with
@@ -413,6 +439,11 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   programs via `program_for_battery`; Bar LED frames via `sdled.wasm` + upstream
   blending constants. Hook install/uninstall via the `sidepulse agent-monitor`
   CLI.
+- **Amended in #6 (Settings):** further stdin commands: `set-bar-leds` (`enabled`),
+  `set-agent-list` (`idle_timeout_seconds` and/or `recent_session_retention_seconds`),
+  `hooks-install` and `hooks-uninstall` (`provider`), and `set-notify` (`enabled`,
+  D20). Capabilities `hooks`, `hook_log`, `settings` and `notify` (notify-send on
+  PATH) are probed at start like the others.
 - **Linux-only additions (D10, D11):** `/sys/class/power_supply` reader that
   produces upstream's battery snapshot type; logind lid state; holds a
   `systemd-inhibit --what=sleep:handle-lid-switch --mode=block` child while

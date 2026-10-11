@@ -15,11 +15,19 @@ Events (stdout):
   devices   connected SidePulse devices: id, product, LED count, remembered
             Display (agent, off), brightness percent and the colour its LEDs
             show now (null when dark)
+  hooks     each agent's hook config: whether it exists and has SidePulse's hooks
+  log       the last hook decision rows: provider, event, the State it became
+  settings  idle timeout, session retention and the Bar LEDs switch (upstream's)
+  result    outcome of a command: start-service, hooks-install, hooks-uninstall,
+            open-session
 
 Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"},
 {"cmd": "set-displays", "displays": {device id: display}} (the widget's full
 remembered map; the helper reconciles every connected device to it, D9), and
-{"cmd": "set-brightness", "device": id, "percent": 0-100}.
+{"cmd": "set-brightness", "device": id, "percent": 0-100},
+{"cmd": "hooks-install" | "hooks-uninstall", "provider": name} (D13),
+{"cmd": "set-agent-list", "idle_timeout_seconds"?, "recent_session_retention_seconds"?},
+{"cmd": "set-bar-leds", "enabled": bool} and {"cmd": "set-notify", "enabled": bool} (D20).
 
 It never binds events.sock: that socket belongs to upstream's service (D4).
 """
@@ -31,13 +39,16 @@ import ctypes.util
 import importlib
 import importlib.metadata
 import json
+import math
 import os
 import re
 import select
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +59,16 @@ HELPER_VERSION = "dev"
 TICK_SECONDS = 1.0
 SETUP_EVERY_TICKS = 5
 SERVICE_START_TIMEOUT_SECONDS = 60.0
+# Hook log rows the popup keeps (newest first), and how long one hook command may run.
+HOOK_LOG_ROWS = 8
+HOOK_COMMAND_TIMEOUT_SECONDS = 60.0
+# The libnotify action a click invokes. Omarchy's notification server invokes
+# only this one, and only while the sender is alive (D20).
+NOTIFY_ACTION = "default"
+NOTIFY_BODY_LIMIT = 200
+# Upstream's agent names as the popup writes them (GLOSSARY: Agent).
+PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "junie": "Junie"}
+NOTIFY_REASON = "notify-send is not installed; the Ask notifications need it (libnotify)"
 INSTALL_COMMAND = "curl -fsSL https://sidepulse.io/setup.sh | bash"
 # A device's Display (D9). Upstream stores only Agent or Manual ("custom") on
 # Linux, so Off holds the device in Manual. Battery joins with #11.
@@ -97,6 +118,18 @@ REQUIRED_NAMES = {
         "sidepulse.settings": ("load_settings", "save_settings"),
         "sidepulse.led_status": ("led_count_for_target", "builtin_animation_program"),
     },
+    "hooks": {
+        "sidepulse.providers": ("detect_provider_configs", "HOOK_PROVIDERS"),
+        "sidepulse.cli": ("sidepulse_main",),
+    },
+    "hook_log": {
+        "sidepulse.audit": ("default_status_audit_log_path", "read_recent_lines", "AUDIT_COLUMNS"),
+    },
+    "settings": {
+        "sidepulse.settings": ("load_settings", "save_settings",
+                               "AgentMonitorSettings.with_agent_list_timing",
+                               "AgentMonitorSettings.with_virtual_status_device"),
+    },
 }
 WASMTIME_REASON = "wasmtime is not installed in the SidePulse venv; the Bar LEDs need it"
 
@@ -124,6 +157,7 @@ def probe_capabilities() -> dict[str, dict[str, Any]]:
     for feature, modules in REQUIRED_NAMES.items():
         caps[feature] = _probe_names(modules)
     caps["bar_leds"] = _probe_wasmtime()
+    caps["notify"] = _probe_notify()
     return caps
 
 
@@ -134,7 +168,11 @@ def _probe_names(modules: dict[str, tuple[str, ...]]) -> dict[str, Any]:
         except ImportError as exc:
             return {"ok": False, "reason": f"{module_name} cannot be imported: {exc}"}
         for name in names:
-            if not hasattr(module, name):
+            # "Class.attribute" checks a method or class attribute, e.g. AgentMonitorSettings.with_...
+            target: Any = module
+            for part in name.split("."):
+                target = getattr(target, part, None)
+            if target is None:
                 return {"ok": False, "reason": f"{module_name} has no {name}; upstream changed"}
     return {"ok": True, "reason": ""}
 
@@ -144,6 +182,12 @@ def _probe_wasmtime() -> dict[str, Any]:
         importlib.import_module("wasmtime")
     except ImportError:
         return {"ok": False, "reason": WASMTIME_REASON}
+    return {"ok": True, "reason": ""}
+
+
+def _probe_notify() -> dict[str, Any]:
+    if shutil.which("notify-send") is None:
+        return {"ok": False, "reason": NOTIFY_REASON}
     return {"ok": True, "reason": ""}
 
 
@@ -309,7 +353,7 @@ def discover_device_rows() -> list[Device]:
     return rows
 
 
-def save_device_settings(change: Any) -> None:
+def change_settings(change: Any) -> None:
     """Load, change and save upstream settings.json (D9, D13).
 
     Upstream's own load_settings/save_settings do the work, so keys upstream
@@ -323,6 +367,148 @@ def save_device_settings(change: Any) -> None:
     if path.exists() and not isinstance(json.loads(path.read_text()), dict):
         raise ValueError(f"{path} is not a JSON object; not overwriting it")
     save_settings(change(load_settings(path)), path)
+
+
+def settings_event(settings: Any) -> dict[str, Any]:
+    """The Settings section's upstream values (D13)."""
+    return {
+        "type": "settings",
+        "bar_leds": settings.virtual_status_device_enabled,
+        "idle_timeout_seconds": settings.idle_timeout_seconds,
+        "recent_session_retention_seconds": settings.recent_session_retention_seconds,
+    }
+
+
+def timing_change(command: dict[str, Any]) -> tuple[float | None, float | None] | str:
+    """The idle timeout and retention a set-agent-list command asks for, or why it is refused.
+
+    Upstream clamps a negative or non-numeric value to 0 without saying so, so
+    the helper refuses it here. An idle timeout of 0 would mark every session
+    stale at once, so it must be positive; retention may be 0.
+    """
+    idle = command.get("idle_timeout_seconds")
+    retention = command.get("recent_session_retention_seconds")
+    if idle is None and retention is None:
+        return "set-agent-list needs idle_timeout_seconds, recent_session_retention_seconds or both"
+    for name, value in (("idle_timeout_seconds", idle), ("recent_session_retention_seconds", retention)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return f"{name} must be a number of seconds"
+        if value < 0:
+            return f"{name} must be 0 or more seconds"
+    if idle is not None and idle <= 0:
+        return "idle_timeout_seconds must be more than 0 seconds"
+    return (None if idle is None else float(idle), None if retention is None else float(retention))
+
+
+def hooks_event(home: Path | None = None) -> dict[str, Any]:
+    """Each agent's hook config (D13), one row per agent upstream lists (HOOK_PROVIDERS).
+
+    The rows are doctor's fields plus `installed`: SidePulse's own hooks are
+    present, which is what its log paths show (an unrelated hook on a known
+    event sets hooks_enabled but not installed). Upstream's detectors read
+    whatever JSON a config holds, so one that raises becomes that agent's
+    `error` row; the other agents are still reported (D14).
+    """
+    from sidepulse import providers
+
+    rows: list[dict[str, Any]] = []
+    for name in providers.HOOK_PROVIDERS:
+        try:
+            config = getattr(providers, f"detect_{name}_config")(home)
+        except Exception as exc:  # the boundary to upstream: report it, keep the other agents
+            rows.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        row = config.to_dict()
+        row["installed"] = bool(config.log_paths)
+        rows.append(row)
+    return {"type": "hooks", "providers": rows}
+
+
+def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str]:
+    """`agent-monitor install|uninstall <provider>` in the SidePulse venv (D4: hooks go through the CLI).
+
+    Installing or removing a hook edits the user's agent config, so this runs
+    only where the caller means it; tests run it under a scratch HOME.
+    """
+    result = subprocess.run(
+        [python, "-I", "-m", "sidepulse", "agent-monitor", action, provider],
+        capture_output=True,
+        text=True,
+        timeout=HOOK_COMMAND_TIMEOUT_SECONDS,
+        check=False,
+    )
+    output = (result.stdout + result.stderr).strip()
+    return result.returncode == 0, output or f"exit {result.returncode}"
+
+
+def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict[str, Any]:
+    """The last `limit` hook decisions, newest first (D13).
+
+    Read from upstream's event-status.jsonl (the audit log the hooks write). Each
+    row shows the State the decision left the session in, as the menu bar names it.
+    """
+    from sidepulse.audit import AUDIT_COLUMNS, default_status_audit_log_path, read_recent_lines
+
+    source = path or default_status_audit_log_path()
+    try:
+        lines = read_recent_lines(source, limit)
+    except FileNotFoundError:
+        return {"type": "log", "rows": []}  # no hook has run yet; anything else is reported by the caller
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        row = {column: str(record.get(column, "")) for column in AUDIT_COLUMNS}
+        state = state_for_mode(row["status"]) if row["status"] else None
+        rows.append({
+            "time": _local_clock(row["logged_at"]),
+            "provider": row["provider"],
+            "event": row["hook_event"],
+            "label": STATE_LABELS[state] if state else "",
+            "colour": STATE_COLOURS[state] if state else "",
+        })
+    rows.reverse()
+    return {"type": "log", "rows": rows[:limit]}
+
+
+def _local_clock(stamp: str) -> str:
+    try:
+        return datetime.fromisoformat(stamp).astimezone().strftime("%H:%M:%S")
+    except ValueError:
+        return stamp
+
+
+# --- Notify when a session asks (D20) -----------------------------------------
+
+def asking_sessions(statuses: list[Any]) -> dict[tuple[str, str], Any]:
+    """The fresh statuses that are in Ask, keyed by (provider, session id)."""
+    return {
+        (status.provider.lower(), status.session_id): status
+        for status in statuses
+        if status.session_id and state_for_mode(status.mode.value) == "ask"
+    }
+
+
+def notification_text(status: Any) -> tuple[str, str]:
+    """The summary and body of the notice for a session that asks."""
+    name = PROVIDER_NAMES.get(status.provider.lower(), status.provider)
+    project = Path(status.cwd).name if status.cwd else ""
+    message = " ".join(str(status.message or "").split())
+    body = ": ".join(part for part in (project, message) if part)
+    if len(body) > NOTIFY_BODY_LIMIT:
+        body = body[: NOTIFY_BODY_LIMIT - 3].rstrip() + "..."
+    return f"{name} needs attention", body
+
+
+def notify_argv(summary: str, body: str) -> list[str]:
+    """notify-send with a default action: it waits, and prints the action's name when clicked."""
+    return ["notify-send", "--app-name=SidePulse", "--wait", f"--action={NOTIFY_ACTION}=Open session", summary, body]
 
 
 def display_of(displays: dict[str, str], device_id: str) -> str:
@@ -347,7 +533,7 @@ def apply_display(device: Device, display: str) -> None:
 
     upstream = UPSTREAM_DISPLAY[display]
     if load_settings().display_for_device(device.id) != upstream:
-        save_device_settings(
+        change_settings(
             lambda s: s.with_device_display(device.id, upstream, name=device.name, path=device.path))
     if upstream == "custom":
         program = builtin_animation_program("off", device.led_count)
@@ -379,7 +565,7 @@ def set_device_brightness(device: Device, percent: float) -> None:
     from sidepulse.settings import normalize_brightness
 
     value = normalize_brightness(percent * 255 / 100)
-    save_device_settings(
+    change_settings(
         lambda s: s.with_device_brightness(device.id, value, name=device.name, path=device.path))
 
 
@@ -939,6 +1125,14 @@ class Helper:
         self.reported: set[tuple[str, str]] = set()
         self.buffer = b""
         self.ticks = 0
+        self.last_hooks: dict[str, Any] | None = None
+        self.last_log: dict[str, Any] | None = None
+        self.last_settings: dict[str, Any] | None = None
+        # Notify when a session asks (D20). `asking` is the set of sessions in Ask at the last good read;
+        # None until the first read, so sessions already asking at start-up do not notify.
+        self.notify_on_ask = False
+        self.asking: set[tuple[str, str]] | None = None
+        self.notifications: list[tuple[tuple[str, str], subprocess.Popen, Any]] = []
 
     def emit(self, event: dict[str, Any]) -> None:
         self.out.write(json.dumps(event, separators=(",", ":")) + "\n")
@@ -984,8 +1178,9 @@ class Helper:
         from sidepulse.settings import load_settings
 
         statuses: list[Any] = []
+        settings = load_settings()
+        self.refresh_settings(settings, force)
         try:
-            settings = load_settings()
             snapshot = read_snapshot(
                 self.latest_path,
                 now=datetime.now(timezone.utc),
@@ -1000,11 +1195,51 @@ class Helper:
             event = state_event(snapshot)
             if self.capabilities["sessions"]["ok"]:
                 statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
+            self.note_asks(asking_sessions(snapshot.statuses))
         if force or event != self.last_state:
             self.last_state = event
             self.emit(event)
         self.session_statuses = statuses
         self.refresh_sessions(force)
+
+    def refresh_settings(self, settings: Any, force: bool = False) -> None:
+        if not self.capabilities.get("settings", {}).get("ok"):
+            return
+        event = settings_event(settings)
+        if force or event != self.last_settings:
+            self.last_settings = event
+            self.emit(event)
+
+    def refresh_hooks(self, force: bool = False) -> None:
+        """Each agent's hook config (D13). Read from the config files, so it is cheap to re-read."""
+        if not self.capabilities.get("hooks", {}).get("ok"):
+            return
+        try:
+            event = hooks_event()
+        except (OSError, ValueError) as exc:
+            self.report("hooks", f"cannot read the agent hook configs: {exc}")
+            return
+        problems = [f"{row['provider']}: {row['error']}" for row in event["providers"] if "error" in row]
+        if problems:
+            self.report("hooks", "cannot read " + "; ".join(problems))
+        else:
+            self.resolve("hooks")
+        if force or event != self.last_hooks:
+            self.last_hooks = event
+            self.emit(event)
+
+    def refresh_log(self, force: bool = False) -> None:
+        if not self.capabilities.get("hook_log", {}).get("ok"):
+            return
+        try:
+            event = hook_log_event()
+        except OSError as exc:
+            self.report("hook_log", f"cannot read the hook log: {exc}")
+            return
+        self.resolve("hook_log")
+        if force or event != self.last_log:
+            self.last_log = event
+            self.emit(event)
 
     def refresh_sessions(self, force: bool = False) -> None:
         event = sessions_event(self.session_statuses)
@@ -1084,6 +1319,140 @@ class Helper:
         self.refresh_state(force)
         self.refresh_devices(force)
         self.refresh_setup(force)
+        self.refresh_hooks(force)
+        self.refresh_log(force)
+
+    def set_agent_list(self, command: dict[str, Any]) -> None:
+        if not self.capabilities.get("settings", {}).get("ok"):
+            self.error("settings", "the settings are unavailable: " + self.capabilities.get("settings", {}).get("reason", ""))
+            return
+        change = timing_change(command)
+        if isinstance(change, str):
+            self.error("command", change)
+            return
+        idle, retention = change
+        try:
+            change_settings(lambda s: s.with_agent_list_timing(
+                idle_timeout_seconds=idle, recent_session_retention_seconds=retention))
+        except (OSError, ValueError) as exc:
+            self.error("settings", f"cannot save the timeouts: {exc}")
+            return
+        self.refresh_state(force=True)
+
+    def set_bar_leds(self, command: dict[str, Any]) -> None:
+        if not self.capabilities.get("settings", {}).get("ok"):
+            self.error("settings", "the settings are unavailable: " + self.capabilities.get("settings", {}).get("reason", ""))
+            return
+        enabled = command.get("enabled")
+        if not isinstance(enabled, bool):
+            self.error("command", "set-bar-leds needs enabled: true or false")
+            return
+        try:
+            change_settings(lambda s: s.with_virtual_status_device(enabled))
+        except (OSError, ValueError) as exc:
+            self.error("settings", f"cannot save the Bar LEDs switch: {exc}")
+            return
+        self.refresh_state(force=True)
+
+    def set_notify(self, command: dict[str, Any]) -> None:
+        enabled = command.get("enabled")
+        if not isinstance(enabled, bool):
+            self.error("command", "set-notify needs enabled: true or false")
+            return
+        self.notify_on_ask = enabled
+
+    def hook_command(self, action: str, command: dict[str, Any]) -> None:
+        """Install or remove one agent's hooks (D13), then re-read what the configs say now."""
+        if not self.capabilities.get("hooks", {}).get("ok"):
+            self.error("hooks", "the hooks are unavailable: " + self.capabilities.get("hooks", {}).get("reason", ""))
+            return
+        from sidepulse.providers import HOOK_PROVIDERS
+
+        provider = command.get("provider")
+        if provider not in HOOK_PROVIDERS:
+            self.error("command", f"{action} needs a provider: one of {', '.join(HOOK_PROVIDERS)}")
+            return
+        try:
+            ok, message = run_hook_command(action, provider, sys.executable)
+        except (OSError, subprocess.SubprocessError) as exc:
+            ok, message = False, f"cannot run the SidePulse CLI: {exc}"
+        self.emit({"type": "result", "command": f"hooks-{action}", "provider": provider, "ok": ok,
+                   "message": message})
+        self.refresh_hooks(force=True)
+        self.refresh_log(force=True)
+
+    # --- Notify when a session asks (D20) ---
+
+    def note_asks(self, asking: dict[tuple[str, str], Any]) -> None:
+        """Notify for each session that entered Ask since the last good read (once per entry)."""
+        previous = self.asking
+        self.asking = set(asking)
+        if previous is None or not self.notify_on_ask:
+            return
+        if not self.capabilities.get("notify", {}).get("ok"):
+            return
+        for key in asking:
+            if key not in previous:
+                self.notify(asking[key])
+
+    def notify(self, status: Any) -> None:
+        summary, body = notification_text(status)
+        key = (status.provider.lower(), status.session_id)
+        # stderr goes to a file, not a pipe nobody reads: a notice that stays up must not block.
+        err = tempfile.TemporaryFile()
+        try:
+            proc = subprocess.Popen(notify_argv(summary, body), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=err)
+        except OSError as exc:
+            err.close()
+            self.report("notify", f"cannot run notify-send: {exc}")
+            return
+        os.set_blocking(proc.stdout.fileno(), False)
+        self.notifications.append((key, proc, err))
+
+    def pump_notifications(self, timeout: float = 0.0) -> None:
+        """Read the notices: a click prints the action's name and opens the session; the end of output ends the notice."""
+        if not self.notifications:
+            if timeout > 0:
+                time.sleep(timeout)
+            return
+        ready, _, _ = select.select([proc.stdout.fileno() for _, proc, _ in self.notifications], [], [], timeout)
+        for key, proc, err in list(self.notifications):
+            if proc.stdout.fileno() not in ready:
+                continue
+            try:
+                data = os.read(proc.stdout.fileno(), 4096)
+            except BlockingIOError:
+                continue
+            if data:
+                if NOTIFY_ACTION in data.decode(errors="replace").split():
+                    self.open_session({"provider": key[0], "session_id": key[1]})
+                continue
+            self.finish_notification(proc, err)
+
+    def finish_notification(self, proc: subprocess.Popen, err: Any) -> None:
+        """The notice is gone: its exit code says whether notify-send itself failed (D14)."""
+        self.notifications = [entry for entry in self.notifications if entry[1] is not proc]
+        proc.stdout.close()
+        try:
+            code = proc.wait(timeout=COMMAND_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            code = proc.wait()
+        if code != 0:
+            err.seek(0)
+            said = err.read().decode(errors="replace").strip().splitlines()
+            self.error("notify", f"notify-send exited {code}" + (f": {said[-1]}" if said else ""))
+        err.close()
+
+    def close_notifications(self) -> None:
+        """The helper is ending: a notice still up goes with it, so no click can reach a dead helper."""
+        for _, proc, err in self.notifications:
+            if proc.poll() is None:
+                proc.terminate()
+            proc.wait()
+            err.close()
+        self.notifications = []
 
     def set_displays(self, command: dict[str, Any]) -> None:
         displays = command.get("displays")
@@ -1158,12 +1527,26 @@ class Helper:
             self.set_brightness(command)
         elif name == "open-session":
             self.open_session(command)
+        elif name in ("hooks-install", "hooks-uninstall"):
+            self.hook_command(name.removeprefix("hooks-"), command)
+        elif name == "set-agent-list":
+            self.set_agent_list(command)
+        elif name == "set-bar-leds":
+            self.set_bar_leds(command)
+        elif name == "set-notify":
+            self.set_notify(command)
         else:
             self.error("command", f"unknown command {name!r}")
 
     def run(self, stdin_fd: int) -> None:
-        self.hello()
-        self.refresh(force=True)
+        try:
+            self.hello()
+            self.refresh(force=True)
+            self.loop(stdin_fd)
+        finally:
+            self.close_notifications()
+
+    def loop(self, stdin_fd: int) -> None:
         while True:
             fds = [stdin_fd]
             if self.watch is not None:
@@ -1176,6 +1559,7 @@ class Helper:
                 else:
                     if self.watch.fd is not None:
                         fds.append(self.watch.fd)
+            fds.extend(proc.stdout.fileno() for _, proc, _ in self.notifications)
             ready, _, _ = select.select(fds, [], [], TICK_SECONDS)
             if stdin_fd in ready:
                 chunk = os.read(stdin_fd, 65536)
@@ -1186,6 +1570,7 @@ class Helper:
                     line, self.buffer = self.buffer.split(b"\n", 1)
                     if line.strip():
                         self.handle_line(line)
+            self.pump_notifications()
             if self.watch is not None and self.watch.fd in ready and "latest.json" in self.watch.names():
                 self.refresh_state()
             self.ticks += 1
@@ -1193,6 +1578,8 @@ class Helper:
             self.refresh_devices()
             if self.ticks % SETUP_EVERY_TICKS == 0:
                 self.refresh_setup()
+                self.refresh_hooks()
+                self.refresh_log()
 
 
 def main() -> int:

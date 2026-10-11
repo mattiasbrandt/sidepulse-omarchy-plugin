@@ -34,10 +34,14 @@ Item {
 
   // Latest events. `state` and `setupItems` are replaced whole on each event.
   property bool helloReceived: false
+  property var capabilities: ({})
   property var agentState: null
   property var setupItems: []
   property var devices: []
   property var sessions: []
+  property var hooks: []
+  property var hookLog: []
+  property var settings: null
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -73,9 +77,13 @@ Item {
   // lifecycle decide whether to restart it.
   function processEnded() {
     helloReceived = false
+    capabilities = ({})
     agentState = null
     devices = []
     sessions = []
+    hooks = []
+    hookLog = []
+    settings = null
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -91,6 +99,13 @@ Item {
   function setBrightness(deviceId, percent) { send({ cmd: "set-brightness", device: deviceId, percent: percent }) }
   // Focus, locate or resume one listed session (D8); the answer is a `result`.
   function openSession(session) { send({ cmd: "open-session", provider: session.provider, session_id: session.session_id }) }
+  // Settings (D13): hooks per agent, the timeouts, the Bar LEDs switch and the Ask notice (D20).
+  function installHooks(provider) { send({ cmd: "hooks-install", provider: provider }) }
+  function uninstallHooks(provider) { send({ cmd: "hooks-uninstall", provider: provider }) }
+  // `timing` holds idle_timeout_seconds and/or recent_session_retention_seconds.
+  function setAgentList(timing) { send(Object.assign({ cmd: "set-agent-list" }, timing)) }
+  function setBarLeds(enabled) { send({ cmd: "set-bar-leds", enabled: enabled }) }
+  function setNotify(enabled) { send({ cmd: "set-notify", enabled: enabled }) }
 
   function handleLine(line) {
     if (line.trim() === "") return
@@ -103,6 +118,7 @@ Item {
     }
     if (event.type === "hello") {
       helloReceived = true
+      capabilities = event.capabilities
       apply(Lifecycle.hello(life))
     } else if (event.type === "state") {
       agentState = event
@@ -112,6 +128,12 @@ Item {
       devices = event.items
     } else if (event.type === "sessions") {
       sessions = event.items
+    } else if (event.type === "hooks") {
+      hooks = event.providers
+    } else if (event.type === "log") {
+      hookLog = event.rows
+    } else if (event.type === "settings") {
+      settings = event
     } else if (event.type === "result") {
       lastResult = event
     } else if (event.type === "error") {

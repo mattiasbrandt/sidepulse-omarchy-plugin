@@ -6,6 +6,7 @@ Commands and terminals are fakes: nothing here focuses a window or starts a term
 from __future__ import annotations
 
 import subprocess
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -180,3 +181,21 @@ def test_ambiguous_window_is_not_guessed():
                                       FakeSpawn())
     assert ok is False
     assert "2" in message
+
+
+# spawn_detached against real commands: a terminal that dies at once is loud (D14).
+
+def test_a_terminal_that_fails_at_once_is_reported_with_its_error():
+    with pytest.raises(helper.CommandFailed, match="no default terminal"):
+        helper.spawn_detached(["sh", "-c", "echo 'no default terminal' >&2; exit 3"], None)
+
+
+def test_a_terminal_that_keeps_running_is_left_running():
+    started = time.monotonic()
+    helper.spawn_detached(["sleep", "5"], None)
+    assert time.monotonic() - started < helper.SPAWN_SETTLE_SECONDS + 1
+
+
+def test_a_terminal_that_hands_off_and_exits_cleanly_is_success():
+    # Single-instance terminals (Ghostty) pass the window to a running one and exit 0.
+    helper.spawn_detached(["true"], None)

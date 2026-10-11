@@ -37,6 +37,7 @@ import select
 import struct
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -755,13 +756,33 @@ def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None =
 Spawn = Callable[[list[str], str | None], None]
 
 
+SPAWN_SETTLE_SECONDS = 1.0
+
+
 def spawn_detached(argv: list[str], cwd: str | None) -> None:
-    """Starts a terminal (or any command) that outlives the helper. A failure to start raises CommandFailed."""
-    try:
-        subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError as exc:
-        raise CommandFailed(f"{argv[0]} cannot start: {exc}") from exc
+    """Starts a terminal (or any command) that outlives the helper.
+
+    Raises CommandFailed when it cannot start, or when it exits with an error
+    within SPAWN_SETTLE_SECONDS (no default terminal, a resume command that
+    fails at once), with what it printed (D14). Its stderr goes to a temporary
+    file, not a pipe: a terminal that keeps running would block once a pipe
+    nobody reads fills up. A clean exit is success, since single-instance
+    terminals hand the window to a running one and exit 0.
+    """
+    with tempfile.TemporaryFile() as err:
+        try:
+            child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                     stderr=err, start_new_session=True)
+        except OSError as exc:
+            raise CommandFailed(f"{argv[0]} cannot start: {exc}") from exc
+        try:
+            code = child.wait(timeout=SPAWN_SETTLE_SECONDS)
+        except subprocess.TimeoutExpired:
+            return  # still running: the terminal is up
+        if code != 0:
+            err.seek(0)
+            said = err.read().decode(errors="replace").strip().splitlines()
+            raise CommandFailed(f"{argv[0]} exited {code}" + (f": {said[-1]}" if said else ""))
 
 
 def focus_window(address: str, title: str, run: Run) -> tuple[bool, str]:

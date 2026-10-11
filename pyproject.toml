@@ -17,7 +17,7 @@ dev = [
 package = false
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "spikes"]
+testpaths = ["tests"]
 # The helper is a script, not a package: tests import it by module name.
 pythonpath = ["helper"]
 

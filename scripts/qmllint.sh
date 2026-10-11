@@ -20,10 +20,10 @@ qmllint=$(command -v qmllint || true)
 [ -x "$qmllint" ] || { echo "qmllint.sh: qmllint not found (install qt6-declarative)" >&2; exit 2; }
 
 cd "$(git rev-parse --show-toplevel)"
-mapfile -t files < <(git ls-files -- '*.qml' ':!:spikes/**')
+mapfile -t files < <(git ls-files -- '*.qml')
 # A singleton is only recognised when qmllint reads the qmldir that declares
 # it; linting the singleton's own file does not look one up.
-mapfile -t qmldirs < <(git ls-files -- '*qmldir' ':!:spikes/**')
+mapfile -t qmldirs < <(git ls-files -- '*qmldir')
 if [ "${#files[@]}" -eq 0 ]; then
   echo "qmllint.sh: no QML files to lint"
   exit 0

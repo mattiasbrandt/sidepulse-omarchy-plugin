@@ -1,6 +1,6 @@
 """Bar LEDs (D6, D7, D21): upstream's sdled.wasm through wasmtime, and the frames the helper streams.
 
-The engine is checked against the reference cases of spikes/wasm/compare.py and
+The engine is checked against the reference cases of tests/bar_leds_reference.py and
 upstream's own test vectors. The program each State shows is upstream's
 `program_for_agent_mode`, called the way upstream's notch calls it. Constants
 that upstream keeps in a module importing AppKit are read from its source and
@@ -26,11 +26,11 @@ from sidepulse.led_wasm import ERROR_NAMES
 from sidepulse.models import AgentMode
 from sidepulse.settings import AgentAnimationSetting, AgentMonitorSettings, CustomAgentAnimation
 
+import bar_leds_reference as reference
 import sidepulse_omarchy as helper
 
 ROOT = Path(__file__).resolve().parent.parent
 HELPER = ROOT / "helper" / "sidepulse_omarchy.py"
-SPIKE_DIR = ROOT / "spikes" / "wasm"
 VECTORS = Path(__file__).resolve().parent / "barleds_vectors.json"
 
 
@@ -52,19 +52,10 @@ def upstream_constants(tree: ast.Module, names: set[str]) -> dict[str, float]:
 
 # --- Engine (D6) ---------------------------------------------------------------
 
-def _compare_module():
-    sys.path.insert(0, str(SPIKE_DIR))
-    try:
-        import compare
-    finally:
-        sys.path.remove(str(SPIKE_DIR))
-    return compare
-
-
-def test_engine_matches_every_reference_case_of_compare_py():
-    """The 117 reference cases (off, every AgentMode, built-in styles, battery, invalid, 2 and 8 LEDs)."""
-    compare = _compare_module()
-    cases = compare.build_cases(None)
+def test_engine_matches_every_reference_case():
+    """Every reference case (off, every AgentMode, built-in styles, battery, invalid, 2 and 8 LEDs)."""
+    compare = reference
+    cases = compare.build_cases()
     for case in cases:
         if case["kind"] == "upstream":
             continue
@@ -77,7 +68,7 @@ def test_engine_matches_every_reference_case_of_compare_py():
 
 
 def test_invalid_programs_report_upstreams_error_names():
-    compare = _compare_module()
+    compare = reference
     # Names the engine reports for the cases whose cause is unambiguous; every case must name one of upstream's errors.
     expected = {"invalid-hex": "bad-color", "invalid-brightness": "bad-brightness",
                 "invalid-too-long": "too-long", "invalid-too-many-lines": "too-many-lines"}
@@ -97,8 +88,7 @@ def test_invalid_programs_report_upstreams_error_names():
 ])
 def test_engine_matches_upstream_test_vectors(vector):
     """tests/test_sidepulse.py::test_led_wasm_controller_* in upstream, replayed through the helper's engine."""
-    compare = _compare_module()
-    case = next(c for c in compare.upstream_vector_cases(None) if c["name"] == vector)
+    case = next(c for c in reference.upstream_vector_cases() if c["name"] == vector)
     engine = helper.SdLedWasm(case["led_count"])
     frames: dict[int, list[tuple]] = {}
     for index, op in enumerate(case["ops"]):

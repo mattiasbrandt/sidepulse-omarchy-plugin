@@ -778,7 +778,7 @@ class SdLedWasm:
     runs the same module in JavaScriptCore on macOS: the engine is reset on
     first use, a program is parsed into the input buffer, and each step writes
     count x 3 RGB bytes at the output pointer. tests/test_bar_leds.py replays the
-    reference cases of spikes/wasm/compare.py and upstream's test vectors.
+    reference cases of tests/bar_leds_reference.py and upstream's test vectors.
     """
 
     def __init__(self, led_count: int = 8, wasm_bytes: bytes | None = None) -> None:
@@ -1271,7 +1271,7 @@ def spawn_detached(argv: list[str], cwd: str | None) -> None:
 
 
 def focus_window(address: str, title: str, run: Run) -> tuple[bool, str]:
-    """Raise a Hyprland window by address (spikes/#2: hyprctl exits 0 even when the address is gone)."""
+    """Raise a Hyprland window by address (spike #2: hyprctl exits 0 even when the address is gone)."""
     if not HYPRLAND_ADDRESS.fullmatch(address):
         return False, f"Not focusing {title}: {address!r} is not a window address"
     done = run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'])

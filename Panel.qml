@@ -20,7 +20,7 @@ Panel {
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  readonly property var agentState: HelperProcess.state
+  readonly property var agentState: HelperProcess.agentState
   readonly property var installRow: ({
     id: "install",
     title: "SidePulse is not installed",

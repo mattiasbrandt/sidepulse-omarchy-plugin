@@ -12,8 +12,11 @@ import Quickshell.Io
 // This file owns the process, parses the NDJSON lines and exposes the latest
 // event of each kind. Logic lives in helper/sidepulse_omarchy.py. Edits here do
 // not hot-reload: `omarchy restart shell` picks them up.
-QtObject {
+Item {
   id: root
+
+  // Holds the Timers and the Process below; an Item takes children, a QtObject does not.
+  visible: false
 
   readonly property int stopDebounceMs: 1500
   readonly property int restartMinMs: 1000
@@ -33,7 +36,7 @@ QtObject {
 
   // Latest events. `state` and `setupItems` are replaced whole on each event.
   property bool helloReceived: false
-  property var state: null
+  property var agentState: null
   property var setupItems: []
   property var errors: ({})
   property var lastResult: null
@@ -60,7 +63,7 @@ QtObject {
   // a backoff that doubles up to restartMaxMs and resets on the next hello.
   function processEnded() {
     helloReceived = false
-    state = null
+    agentState = null
     if (refs > 0) {
       restartTimer.interval = backoffMs
       backoffMs = Math.min(backoffMs * 2, restartMaxMs)
@@ -88,7 +91,7 @@ QtObject {
       helloReceived = true
       backoffMs = restartMinMs
     } else if (event.type === "state") {
-      state = event
+      agentState = event
     } else if (event.type === "setup") {
       setupItems = event.items
     } else if (event.type === "result") {

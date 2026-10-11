@@ -94,6 +94,8 @@ const PROBLEM_TITLES = {
   notify: "Notifications",
   keep_awake: "Keep awake",
   power: "Battery",
+  lid: "Lid",
+  lid_animation: "Lid animation",
   command: "Command",
   protocol: "Protocol",
   watch: "Watching",

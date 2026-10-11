@@ -46,7 +46,7 @@ Panel {
     let found = ""
     for (let i = 0; i < HelperProcess.devices.length; i++) {
       const device = HelperProcess.devices[i]
-      if (!device.colour || displayOf(device.id) !== "agent") continue
+      if (!device.colour || displayOf(device.id) === "off") continue
       if (device.kind === "pro") return device.colour
       if (found === "") found = device.colour
     }
@@ -169,12 +169,12 @@ Panel {
     ? HelperProcess.sessions.map(function (session, index) { return Sessions.sessionRow(index) })
     : ["sessions"]
   readonly property var sectionRows: sessionRowNames.concat(deviceRowNames, ["settings"], settingRowNames)
-  // Battery joins with #11, offered only where there is a battery.
-  readonly property var displayOrder: ["agent", "off"]
-  readonly property var displayChoices: [
-    { value: "agent", label: "Agent" },
-    { value: "off", label: "Off" }
-  ]
+  // Battery is offered only where the helper finds a battery (D9); without one a remembered Battery means Agent.
+  readonly property bool batteryOffered: HelperProcess.power !== null && HelperProcess.power.battery_offered === true
+  readonly property var displayOrder: batteryOffered ? ["agent", "battery", "off"] : ["agent", "off"]
+  readonly property var displayChoices: displayOrder.map(function (value) {
+    return { value: value, label: value === "agent" ? "Agent" : value === "battery" ? "Battery" : "Off" }
+  })
 
   // The product drawn for the icon: Pro wins when both are plugged in (D21).
   readonly property int iconLedCount: {
@@ -185,7 +185,7 @@ Panel {
     return 2
   }
 
-  // A value this version does not offer (none remembered, or a later Battery)
+  // A value not offered here (none remembered, or Battery without a battery)
   // means Agent, as the helper treats it.
   function displayOf(deviceId) {
     const value = deviceDisplays[deviceId]
@@ -924,7 +924,7 @@ Panel {
   }
 
   // One connected device (D13, D21, D22): its product drawn with its LEDs, the
-  // Display (Agent / Off, D9) and brightness.
+  // Display (Agent / Battery / Off, D9) and brightness.
   component DeviceRow: CursorSurface {
     id: deviceRow
     onHasCursorChanged: if (hasCursor) root.scrollItemIntoView(deviceRow)
@@ -934,9 +934,9 @@ Panel {
     readonly property string display: root.displayOf(device.id)
     // The device's LEDs as its program plays them now (the helper's frames, D21). Without frames
     // (the Bar LEDs' engine is unavailable, PROBLEMS says why) they show the program's colour, as
-    // before the frames; Off shows dim.
-    readonly property var leds: display === "agent" ? (HelperProcess.deviceLeds[device.id] || null) : null
-    readonly property color staticColour: display === "agent" && device.colour ? device.colour : root.dim
+    // before the frames; Off shows dim. Agent and Battery both show what the device holds (D9, D10).
+    readonly property var leds: display !== "off" ? (HelperProcess.deviceLeds[device.id] || null) : null
+    readonly property color staticColour: display !== "off" && device.colour ? device.colour : root.dim
 
     hasCursor: root.rowHasCursor(rowName)
     foreground: root.foreground

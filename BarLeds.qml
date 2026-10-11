@@ -7,7 +7,9 @@ import "helper/barleds.mjs" as Band
 // The Bar LEDs (D7, D21): the band of LEDs along the bar's inner edge, drawn
 // from the helper's frames with upstream's blend (helper/barleds.mjs). The
 // item reparents itself into the bar window's contentItem, so the bar's own
-// slots cannot clip it and high z keeps it above the widgets. Every widget copy
+// slots cannot clip it. It sits below the bar's widgets (negative z, above the
+// window's own background colour), so marks the bar draws on the same edge, such
+// as the open-popup line, stay on top of it. Every widget copy
 // asks for its window's band, and the first copy per window holds it
 // (HelperProcess). The position comes from the window, so which copy holds it
 // does not show.
@@ -25,7 +27,7 @@ Item {
   readonly property bool holds: wants && HelperProcess.bandHolder(barWindow) === band
 
   parent: barWindow ? barWindow.contentItem : null
-  z: 1000
+  z: -1
   visible: holds
   width: parent ? Math.min(Band.WINDOW_WIDTH, parent.width) : 0
   height: Band.LED_BAND_HEIGHT

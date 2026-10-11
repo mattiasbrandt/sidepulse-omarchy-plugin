@@ -39,9 +39,15 @@ stopped service (Start service runs `sidepulse service start`), or a device.
 
 Click the SidePulse icon in the bar to open the popup. `j` and `k` (or the arrow
 keys) move the highlight, Enter runs the highlighted action, `r` refreshes, and
-Esc or a click outside closes it. The sections are empty until their slices
-land: sessions (#4), settings (#6) and keep-awake (#7). A keybind for the popup
-lands in #12.
+Esc or a click outside closes it. Settings (#6) and keep-awake (#7) stay empty
+until their slices land. A keybind for the popup lands in #12.
+
+Sessions lists up to ten recent agent sessions, newest and most urgent first.
+Enter or a click on one jumps to it: a session that is running focuses its
+window, or its herdr or tmux pane (attaching a terminal to it when none is
+open); a session that has stopped resumes in a new terminal, in its folder. When
+SidePulse cannot tell which process runs a session, the popup says so and does
+nothing.
 
 Devices lists each connected SidePulse Dot or SidePulse Pro with its Display
 (Agent or Off) and brightness. Off is saved in SidePulse's own settings, so it
@@ -55,10 +61,11 @@ afterwards set its `led_display` back to `agent` in
 - SidePulse at upstream commit `6d55225fed20a82521b23d86a4df2c4a15dff295`, the
   commit the plugin is tested against. The helper runs under that install's
   Python.
+- `xdg-terminal-exec` (your default terminal) to resume a stopped session, and
+  `hyprctl`, which Omarchy ships, to raise a session's window. Optional: `herdr`
+  or `tmux`, when your agents run inside one.
 - Later slices add their own requirements here: `wasmtime` in the SidePulse
-  venv for the Bar LEDs (#8), `systemd-inhibit` for keep-awake (#7), and
-  `xdg-terminal-exec`, plus optional `herdr` or `tmux`, to jump into sessions
-  (#4).
+  venv for the Bar LEDs (#8) and `systemd-inhibit` for keep-awake (#7).
 
 ## Remove
 
@@ -80,7 +87,14 @@ Plugins run unsandboxed inside `omarchy-shell`. The plugin:
   file), SidePulse's `settings.json` for the idle timeout, and looks for SidePulse
   devices on mounted volumes, without writing to any of them;
 - checks `sidepulse.service` with `systemctl --user is-active`, and runs
-  `sidepulse service start` only when you choose Start service.
+  `sidepulse service start` only when you choose Start service;
+- finds a session's process from `~/.claude/sessions/`, `~/.grok/active_sessions.json`,
+  the transcript titles under `~/.claude/projects/`, and the process table
+  (`/proc`), and reads only those;
+- runs `hyprctl` to list and raise windows, and `herdr` or `tmux` to find and
+  select a session's pane, and starts `xdg-terminal-exec` to open a terminal
+  that resumes a session or attaches to a multiplexer, only when you choose a
+  session in the popup.
 
 It makes no network calls and needs no sudo. The list grows with each feature
 and is complete at #12.

@@ -7,12 +7,23 @@ nothing. A fake notify-send on a scratch PATH stands in for the desktop (test_no
 
 from __future__ import annotations
 
+import pytest
+
 import sidepulse_omarchy as helper
 from test_keep_awake import awake_events, battery_tree, clocked, errors_for, send  # noqa: F401  (fixture)
 from test_notify import fake_notify_send, pump_until  # noqa: F401  (fixture)
 
 PAUSED = "Keep awake paused by the battery safeguard: {} %, unplugged"
 RESUMED = "Keep awake resumed: plugged in"
+
+
+@pytest.fixture
+def notifying(clocked, fake_notify_send):
+    """The clocked helper, probed again with the fake notify-send on PATH: the probe runs at hello, which
+    clocked does before fake_notify_send is set up (CI has no real notify-send, so the first probe failed)."""
+    h, out = clocked
+    h.hello()
+    return h, out
 
 
 def summaries(h: helper.Helper, fake_notify_send) -> list[str]:
@@ -68,8 +79,8 @@ def test_the_safeguard_blocks_only_a_lock_the_policy_wants():
 # --- The helper, with a fake battery and a fake notify-send ---
 
 
-def test_pause_then_resume_send_one_notice_each_and_nothing_between(clocked, tmp_path, fake_notify_send):
-    h, _ = clocked
+def test_pause_then_resume_send_one_notice_each_and_nothing_between(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
     h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
     send(h, {"cmd": "set-policy", "policy": "always"})
     assert summaries(h, fake_notify_send) == []
@@ -85,8 +96,8 @@ def test_pause_then_resume_send_one_notice_each_and_nothing_between(clocked, tmp
     assert summaries(h, fake_notify_send) == [PAUSED.format("15"), RESUMED]
 
 
-def test_the_notices_are_plain_notices_without_an_action(clocked, tmp_path, fake_notify_send):
-    h, _ = clocked
+def test_the_notices_are_plain_notices_without_an_action(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
     h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
     send(h, {"cmd": "set-policy", "policy": "always"})
     h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
@@ -96,16 +107,16 @@ def test_the_notices_are_plain_notices_without_an_action(clocked, tmp_path, fake
     assert "--action" not in argv and "--wait" not in argv
 
 
-def test_a_helper_that_starts_already_blocked_stays_quiet_until_it_changes(clocked, tmp_path, fake_notify_send):
-    h, out = clocked
+def test_a_helper_that_starts_already_blocked_stays_quiet_until_it_changes(notifying, tmp_path, fake_notify_send):
+    h, out = notifying
     h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
     send(h, {"cmd": "set-policy", "policy": "always"})
     assert awake_events(out)[-1]["holding"] is False
     assert summaries(h, fake_notify_send) == []
 
 
-def test_agents_policy_with_no_agent_working_is_silent_under_the_safeguard(clocked, tmp_path, fake_notify_send):
-    h, _ = clocked
+def test_agents_policy_with_no_agent_working_is_silent_under_the_safeguard(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
     h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
     send(h, {"cmd": "set-policy", "policy": "agents"})
     h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
@@ -113,16 +124,16 @@ def test_agents_policy_with_no_agent_working_is_silent_under_the_safeguard(clock
     assert summaries(h, fake_notify_send) == []
 
 
-def test_policy_never_sends_nothing_even_when_the_battery_is_low(clocked, tmp_path, fake_notify_send):
-    h, _ = clocked
+def test_policy_never_sends_nothing_even_when_the_battery_is_low(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
     h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
     send(h, {"cmd": "set-policy", "policy": "never"})
     h.refresh_awake()
     assert summaries(h, fake_notify_send) == []
 
 
-def test_the_notices_ignore_the_ask_notice_switch(clocked, tmp_path, fake_notify_send):
-    h, _ = clocked
+def test_the_notices_ignore_the_ask_notice_switch(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
     assert h.notify_on_ask is False
     h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
     send(h, {"cmd": "set-policy", "policy": "always"})

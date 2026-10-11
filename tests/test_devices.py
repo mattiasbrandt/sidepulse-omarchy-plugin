@@ -1,4 +1,4 @@
-"""Devices (D9, D13): discovery, Agent / Battery / Off, brightness, settings round-trip.
+"""Devices (D9, D13): discovery, Display (Agent / Off), brightness, settings round-trip.
 
 Upstream's own code does the work: discover_devices, LED counts, load_settings,
 save_settings, write_led_program. Expected values come from upstream's
@@ -77,23 +77,36 @@ def test_discovery_reports_each_product_with_its_led_count(mounts):
     assert dot.path == str(mounts / "PulseDot")
 
 
-def test_save_keeps_keys_upstream_does_not_model(home, mounts):
+def test_save_keeps_the_keys_upstream_models(home, mounts):
     device = device_by_name("PulseDot")
     settings_file(home).parent.mkdir(parents=True)
     settings_file(home).write_text(json.dumps({
         "led_display": "agent",
-        "a_key_from_a_newer_upstream": {"kept": True},
-        "devices": [{
-            "id": device.id, "name": "PulseDot", "path": device.path,
-            "led_display": "agent", "brightness": 255, "note": "kept too",
-        }],
+        "agent_list": {"idle_timeout_seconds": 120.0, "recent_session_retention_seconds": 600.0},
+        "devices": [
+            {"id": device.id, "name": "PulseDot", "path": device.path,
+             "led_display": "agent", "brightness": 255},
+            {"id": "/elsewhere/Other", "name": "Other", "path": "/elsewhere/Other",
+             "led_display": "custom", "brightness": 10},
+        ],
     }))
     helper.set_device_brightness(device, 40)
     data = read_settings_json(home)
-    assert data["a_key_from_a_newer_upstream"] == {"kept": True}
-    assert data["devices"][0]["note"] == "kept too"
-    assert data["devices"][0]["brightness"] == 102
-    assert data["devices"][0]["led_display"] == "agent"
+    assert data["agent_list"]["idle_timeout_seconds"] == 120.0
+    assert data["agent_list"]["recent_session_retention_seconds"] == 600.0
+    other = next(entry for entry in data["devices"] if entry["id"] == "/elsewhere/Other")
+    assert other["led_display"] == "custom"
+    assert other["brightness"] == 10
+    assert upstream_entry(home, device.id)["brightness"] == 102
+
+
+def test_save_drops_keys_upstream_does_not_model_as_upstream_does(home, mounts):
+    # D13: unknown-key handling stays upstream's (CODING_STANDARDS).
+    device = device_by_name("PulseDot")
+    settings_file(home).parent.mkdir(parents=True)
+    settings_file(home).write_text(json.dumps({"led_display": "agent", "a_key_from_a_newer_upstream": 1}))
+    helper.set_device_brightness(device, 40)
+    assert "a_key_from_a_newer_upstream" not in read_settings_json(home)
 
 
 def test_off_takes_the_device_to_manual_and_writes_upstreams_off_program(home, mounts):
@@ -114,13 +127,12 @@ def test_agent_hands_the_device_back_to_the_service_without_writing(home, mounts
     assert not (mounts / "PulseDot" / "LEDS.LED").exists()
 
 
-def test_battery_is_manual_with_the_off_program_until_the_battery_reader_lands(home, mounts):
-    # Stopgap for #11: upstream cannot drive battery on Linux, so Battery holds
-    # the device in Manual and shows the off program rather than a stale frame.
-    device = device_by_name("PulseDot")
-    helper.apply_display(device, "battery", written_off=set())
-    assert load_settings().display_for_device(device.id) == "custom"
-    assert (mounts / "PulseDot" / "LEDS.LED").read_text().strip() == off_program()
+def test_a_remembered_display_the_helper_does_not_offer_falls_back_to_agent():
+    # Battery joins with #11; until then, and on a machine without a battery, a
+    # remembered "battery" means Agent.
+    assert helper.display_of({"dev": "battery"}, "dev") == "agent"
+    assert helper.display_of({"dev": "off"}, "dev") == "off"
+    assert helper.display_of({}, "dev") == "agent"
 
 
 def test_a_device_left_manual_by_a_crash_is_repaired_to_agent(home, mounts):

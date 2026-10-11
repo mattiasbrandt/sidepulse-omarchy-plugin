@@ -13,7 +13,7 @@ Events (stdout):
   error     a feature failed or a command was refused; the message says why
   clear     a feature reported by error has recovered
   devices   connected SidePulse devices: id, product, LED count, remembered
-            display (agent, battery, off) and brightness percent
+            Display (agent, off) and brightness percent
 
 Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"},
 {"cmd": "set-displays", "displays": {device id: display}} (the widget's full
@@ -46,11 +46,11 @@ TICK_SECONDS = 1.0
 SETUP_EVERY_TICKS = 5
 SERVICE_START_TIMEOUT_SECONDS = 60.0
 INSTALL_COMMAND = "curl -fsSL https://sidepulse.io/setup.sh | bash"
-# Agent, Battery, Off (D9). Upstream stores only Agent or Manual ("custom") on
-# Linux, so Battery and Off both hold the device in Manual.
-DISPLAYS = ("agent", "battery", "off")
+# A device's Display (D9). Upstream stores only Agent or Manual ("custom") on
+# Linux, so Off holds the device in Manual. Battery joins with #11.
+DISPLAYS = ("agent", "off")
 DEFAULT_DISPLAY = "agent"
-UPSTREAM_DISPLAY = {"agent": "agent", "battery": "custom", "off": "custom"}
+UPSTREAM_DISPLAY = {"agent": "agent", "off": "custom"}
 PRODUCT_NAMES = {"dot": "SidePulse Dot", "pro": "SidePulse Pro"}
 
 # Upstream's four-state UI mapping is `state_for_mode` in status_bar.py (lines
@@ -311,51 +311,32 @@ def discover_device_rows() -> list[Device]:
 def save_device_settings(change: Any) -> None:
     """Load, change and save upstream settings.json (D9, D13).
 
-    Upstream's save_settings rewrites the file from its own model and drops keys
-    it does not know, so the keys the file held before are put back. A file that
-    is not JSON raises here, before anything is overwritten.
+    Upstream's own load_settings/save_settings do the work, so keys upstream
+    models survive and keys it does not model are dropped, as upstream's CLI
+    drops them. A file that is not a JSON object raises here, before anything
+    is overwritten.
     """
     from sidepulse.settings import default_settings_path, load_settings, save_settings
 
     path = default_settings_path()
-    before: dict[str, Any] = {}
-    if path.exists():
-        before = json.loads(path.read_text())
-        if not isinstance(before, dict):
-            raise ValueError(f"{path} is not a JSON object; not overwriting it")
+    if path.exists() and not isinstance(json.loads(path.read_text()), dict):
+        raise ValueError(f"{path} is not a JSON object; not overwriting it")
     save_settings(change(load_settings(path)), path)
-    restore_unmodelled_keys(path, before)
-
-
-def restore_unmodelled_keys(path: Path, before: dict[str, Any]) -> None:
-    after = json.loads(path.read_text())
-    for key, value in before.items():
-        after.setdefault(key, value)
-    old_devices = {
-        entry["id"]: entry
-        for entry in before.get("devices", [])
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
-    }
-    for entry in after.get("devices", []):
-        old = old_devices.get(entry.get("id"))
-        if old is not None:
-            for key, value in old.items():
-                entry.setdefault(key, value)
-    path.write_text(json.dumps(after, indent=2, sort_keys=True) + "\n")
 
 
 def display_of(displays: dict[str, str], device_id: str) -> str:
-    """The widget's remembered display for a device; Agent when none is remembered."""
-    return displays.get(device_id, DEFAULT_DISPLAY)
+    """The widget's remembered Display for a device: Agent when none is
+    remembered, or when the value is not one this helper offers."""
+    display = displays.get(device_id, DEFAULT_DISPLAY)
+    return display if display in DISPLAYS else DEFAULT_DISPLAY
 
 
 def apply_display(device: Device, display: str, *, written_off: set[str]) -> None:
     """Bring one device to its remembered display (D9).
 
     Agent: upstream's `agent`, so the service repaints within its next poll.
-    Battery and Off: upstream's `custom` (Manual), so the service stops writing;
-    the off program is written once per helper, not on every tick. Battery shows
-    the off program until the battery reader lands (#11).
+    Off: upstream's `custom` (Manual), so the service stops writing; the off
+    program is written once per helper, not on every tick.
     """
     from sidepulse.led_status import builtin_animation_program
     from sidepulse.device_writer import write_led_program
@@ -575,7 +556,7 @@ class Helper:
             return
         unknown = [value for value in displays.values() if value not in DISPLAYS]
         if unknown:
-            self.error("command", f"unknown display {unknown[0]!r}; use agent, battery or off")
+            self.error("command", f"unknown display {unknown[0]!r}; use agent or off")
             return
         self.displays = {str(key): value for key, value in displays.items()}
         self.refresh_devices(force=True)

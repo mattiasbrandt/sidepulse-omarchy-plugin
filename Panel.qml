@@ -64,17 +64,17 @@ Panel {
     return lines
   }
 
-  // The display each device was last set to, keyed by device id (D9). Stored in
+  // The Display each device was last set to, keyed by device id (D9). Stored in
   // this widget's shell.json entry; the helper re-derives upstream's value from it.
   readonly property var deviceDisplays: setting("deviceDisplays", ({}))
   readonly property var deviceRowNames: HelperProcess.devices.length > 0
     ? HelperProcess.devices.map(function (device) { return "device:" + device.id })
     : ["devices"]
   readonly property var sectionRows: ["sessions"].concat(deviceRowNames, ["keep-awake", "settings"])
-  readonly property var displayOrder: ["agent", "battery", "off"]
+  // Battery joins with #11, offered only where there is a battery.
+  readonly property var displayOrder: ["agent", "off"]
   readonly property var displayChoices: [
     { value: "agent", label: "Agent" },
-    { value: "battery", label: "Battery", tooltip: "Battery display is not built yet; until it is the LEDs stay off" },
     { value: "off", label: "Off" }
   ]
 
@@ -87,9 +87,11 @@ Panel {
     return 2
   }
 
+  // A value this version does not offer (none remembered, or a later Battery)
+  // means Agent, as the helper treats it.
   function displayOf(deviceId) {
     const value = deviceDisplays[deviceId]
-    return value === undefined ? "agent" : value
+    return displayOrder.indexOf(value) >= 0 ? value : "agent"
   }
 
   function deviceById(deviceId) {
@@ -510,7 +512,7 @@ Panel {
   }
 
   // One connected device (D13, D21, D22): its product drawn with its LEDs, the
-  // display choice (Agent / Battery / Off, D9) and brightness.
+  // Display (Agent / Off, D9) and brightness.
   component DeviceRow: CursorSurface {
     id: deviceRow
     required property var device
@@ -518,7 +520,7 @@ Panel {
     readonly property string rowName: "device:" + device.id
     readonly property string display: root.displayOf(device.id)
     // Agent lights the LEDs in the agent state's colour (the animation frames come
-    // with the Bar LEDs, #8); Battery and Off leave them dim.
+    // with the Bar LEDs, #8); Off leaves them dim.
     readonly property color ledColour: display === "agent" && root.agentState !== null
       ? root.agentState.colour
       : root.dim
@@ -571,6 +573,14 @@ Panel {
             font.pixelSize: Style.font.caption
           }
         }
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        text: "Display"
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
 
       ButtonGroup {

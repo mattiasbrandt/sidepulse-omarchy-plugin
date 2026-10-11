@@ -8,9 +8,9 @@ An Omarchy bar widget for SidePulse devices and AI coding agents: it shows
 agent status in the bar and drives SidePulse devices, the way the macOS
 SidePulse menu-bar app does.
 
-This is an early build. The bar icon follows your agents' state and the popup is
-an empty frame; the features land slice by slice, tracked in the
-[plan](docs/spec.md) and its issues.
+This is an early build. The bar icon follows your agents' state, and the popup
+lists your sessions and devices and holds the settings. The remaining features
+land slice by slice, tracked in the [plan](docs/spec.md) and its issues.
 
 ## Install
 

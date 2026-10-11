@@ -25,6 +25,11 @@ test("age is measured from the helper's epoch milliseconds, never negative", () 
   assert.equal(Sessions.ageSeconds(5000, 1000), 0)
 })
 
+test("a message reads on one line, whatever newlines it carries", () => {
+  assert.equal(Sessions.oneLine("<analysis>\n**Session flow**\n\n1. Architecture  "), "<analysis> **Session flow** 1. Architecture")
+  assert.equal(Sessions.oneLine(null), "")
+})
+
 test("the provider reads with a capital, and nothing when unknown", () => {
   assert.equal(Sessions.providerLabel("claude"), "Claude")
   assert.equal(Sessions.providerLabel("codex"), "Codex")

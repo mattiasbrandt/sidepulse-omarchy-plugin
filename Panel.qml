@@ -660,8 +660,9 @@ Panel {
         textFormat: Text.PlainText
         visible: text !== ""
         width: parent.width
-        text: sessionRow.session.message || ""
+        text: Sessions.oneLine(sessionRow.session.message)
         elide: Text.ElideRight
+        maximumLineCount: 1
         color: root.dim
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption

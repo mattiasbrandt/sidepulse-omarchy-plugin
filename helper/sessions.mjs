@@ -20,6 +20,12 @@ export function ageSeconds(updatedMs, nowMs) {
   return Math.max(0, (nowMs - updatedMs) / 1000)
 }
 
+// A session's last message on one line: upstream's messages can carry newlines
+// and markdown, and a row has one line for them.
+export function oneLine(text) {
+  return String(text || "").replace(/\s+/g, " ").trim()
+}
+
 // The provider as the row names it: "claude" reads "Claude".
 export function providerLabel(provider) {
   if (!provider) return ""

@@ -25,6 +25,13 @@ install SidePulse with its official installer:
 curl -fsSL https://sidepulse.io/setup.sh | bash
 ```
 
+After installing or updating the plugin (`omarchy plugin update`), restart the
+shell so it loads the new version's helper; it keeps the old one otherwise:
+
+```sh
+omarchy restart shell
+```
+
 The popup's Setup section lists anything still missing: SidePulse itself, a
 stopped service (Start service runs `sidepulse service start`), or a device.
 

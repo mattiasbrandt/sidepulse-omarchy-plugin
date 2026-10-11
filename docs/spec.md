@@ -108,6 +108,19 @@ _Filled in during grilling, one entry per answered question._
     So the singleton refcounts widget copies and stops the helper when the
     count stays at 0 (debounced — a reload drops it to 0 and back within
     milliseconds), and restarts it when a copy registers again.
+  - *Live check on #10:* `omarchy plugin add`, `update` and `enable` only
+    rescan, so after an update the new widget runs against the old singleton;
+    on a shell that had loaded an older copy, the widget started no helper at
+    all. Installing or updating needs `omarchy restart shell` (README), and
+    `scripts/live-check.sh` restarts the shell on every install.
+  - *Spike #28 (QML logic under test):* the QML engine imports an ECMAScript
+    module (`import "lifecycle.mjs" as Lifecycle`), calls its exports and
+    reads its constants; measured with Qt's `qml` runner (same engine as
+    Quickshell) and live in the bar, and qmllint 6.11 and 6.12 accept it.
+    So the lifecycle (refcount, debounced stop, restart backoff) is pure
+    functions in `helper/lifecycle.mjs` that return actions, tested by
+    `node --test`; the singleton only applies them. The #26 restart race is a
+    regression test there.
   - Edits to the singleton's own QML do **not** hot-reload (old code kept
     running until `omarchy restart shell`). Keep the singleton a thin process
     owner and line dispatcher; logic lives in the helper and in ordinary
@@ -297,10 +310,12 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 ├── helper/
 │   ├── qmldir           declares the singleton below (*amended in #10*: imported
 │   │                    as "helper", not from the root: see the note under D5)
-│   ├── HelperProcess.qml  pragma Singleton: owns the one helper Process, refcounts
-│   │                    widget copies (stop at 0, debounced), parses NDJSON (D5)
+│   ├── HelperProcess.qml  pragma Singleton: owns the one helper Process, applies
+│   │                    lifecycle.mjs's actions, parses NDJSON (D5)
+│   ├── lifecycle.mjs    refcount, debounced stop, restart backoff as pure
+│   │                    functions (*amended in #28*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
-├── tests/               pytest for the helper
+├── tests/               pytest for the helper; node --test for *.mjs
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
 ├── README.md  LICENSE (MIT)  preview.png  docs/spec.md
 ```

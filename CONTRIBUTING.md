@@ -88,7 +88,12 @@ CI (`.github/workflows/ci.yml`) runs on every PR and on `main`:
 | SidePulse naming (D24) | `python3 -I scripts/check_names.py` |
 | Python tests | `UV_PROJECT_ENVIRONMENT="$HOME/.cache/sidepulse-omarchy-plugin/venv" uv run --locked pytest` |
 | qmllint against the Omarchy shell | `scripts/qmllint.sh` |
+| QML logic tests (lifecycle state machine) | `node --test tests/*.test.mjs` |
 | actionlint | `actionlint` |
+
+The live check on the bar runs only locally, because CI has no Omarchy session:
+`scripts/live-check.sh up`, exercise the change, `scripts/live-check.sh down`
+(AGENTS.md has the details).
 
 Every action is pinned to a full commit SHA with its `# vX.Y.Z`; Dependabot
 moves the pins weekly.

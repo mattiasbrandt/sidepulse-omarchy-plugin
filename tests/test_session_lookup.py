@@ -148,6 +148,15 @@ class LookupStates(unittest.TestCase):
         self.sys.claude_session_file(201, SESSION, 5555)
         self.assertEqual(self.sys.resolve("claude")["state"], "unresolved")
 
+    def test_resume_argument_of_a_process_that_moved_on_is_not_proof(self) -> None:
+        # `claude --resume OTHER` started, then the process took up SESSION (its session file says so).
+        # The argument no longer tells us what runs there, so OTHER has stopped.
+        other = "019a0000-aaaa-7bbb-8ccc-0000000000ff"
+        self.sys.process(201, "claude", cwd=CWD, args=["claude", "--resume", other], starttime=5555)
+        self.sys.claude_session_file(201, SESSION, 5555)
+        result = resolve("claude", other, CWD, proc=Proc(self.sys.proc_root), home=self.sys.home, clients=[])
+        self.assertEqual((result["state"], result["action"]), ("stopped", "resume"))
+
     def test_claude_without_session_file_or_process_resumes(self) -> None:
         self.assertEqual(self.sys.resolve("claude")["action"], "resume")
 

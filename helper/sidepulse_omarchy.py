@@ -505,19 +505,23 @@ class Proc:
         return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
 
 
-def claude_pid(session_id: str, proc: Proc, home: Path) -> int | None:
+def claude_session_ids(proc: Proc, home: Path) -> dict[int, str]:
+    """pid -> the session Claude's session file says it runs, for pids that still have the recorded start time."""
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "sessions"
+    owners: dict[int, str] = {}
     for path in root.glob("*.json"):
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        if data.get("sessionId") != session_id:
-            continue
         pid = int(data["pid"])
         if proc.starttime(pid) == str(data.get("procStart")):
-            return pid
-    return None
+            owners[pid] = data.get("sessionId")
+    return owners
+
+
+def claude_pid(session_id: str, proc: Proc, home: Path) -> int | None:
+    return next((pid for pid, owned in claude_session_ids(proc, home).items() if owned == session_id), None)
 
 
 def grok_pid(session_id: str, proc: Proc, home: Path) -> int | None:
@@ -552,6 +556,11 @@ def find_process(provider: str, session_id: str, cwd: str | None, proc: Proc, ho
         return {"state": "unresolved", "reason": f"unknown provider {provider!r}", "candidates": []}
     # Interactive agents hold a terminal; daemons such as `codex app-server` do not.
     pids = [pid for pid in proc.pids_of(binary) if proc.has_terminal(pid)]
+    # A Claude process whose session file names another session is not a candidate for this one,
+    # whatever its command line says: `claude --resume X` still shows X after the process moved on.
+    if provider == "claude":
+        elsewhere = {pid for pid, owned in claude_session_ids(proc, home).items() if owned != session_id}
+        pids = [pid for pid in pids if pid not in elsewhere]
     by_cmdline = [pid for pid in pids if names_session(proc.cmdline(pid), session_id)]
     if len(by_cmdline) == 1:
         return {"state": "live", "pid": by_cmdline[0], "proof": "cmdline"}

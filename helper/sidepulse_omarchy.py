@@ -13,7 +13,8 @@ Events (stdout):
   error     a feature failed or a command was refused; the message says why
   clear     a feature reported by error has recovered
   devices   connected SidePulse devices: id, product, LED count, remembered
-            Display (agent, off) and brightness percent
+            Display (agent, off), brightness percent and the colour its LEDs
+            show now (null when dark)
 
 Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"},
 {"cmd": "set-displays", "displays": {device id: display}} (the widget's full
@@ -31,6 +32,7 @@ import importlib
 import importlib.metadata
 import json
 import os
+import re
 import select
 import struct
 import subprocess
@@ -354,6 +356,17 @@ def apply_display(device: Device, display: str) -> None:
             write_led_program(program, device_path=device.target)
 
 
+COLOUR = re.compile(r"#([0-9A-Fa-f]{6})")
+
+
+def shown_colour(device: Device) -> str | None:
+    """The first colour of the program the device holds now: what its LEDs
+    show, which can differ from the menu-bar legend colour (Done is cyan on
+    the device, green in the legend). None when dark or holding no program."""
+    match = COLOUR.search(shown_program(device) or "")
+    return "#" + match.group(1).upper() if match else None
+
+
 def shown_program(device: Device) -> str | None:
     """The LED program the device holds now; None when it holds none."""
     try:
@@ -548,6 +561,7 @@ class Helper:
                 "led_count": device.led_count,
                 "display": display_of(self.displays or {}, device.id),
                 "percent": round(settings.brightness_for_device(device.id) * 100 / 255),
+                "colour": shown_colour(device),
             })
         return {"type": "devices", "items": items}
 

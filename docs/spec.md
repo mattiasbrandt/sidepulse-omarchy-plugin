@@ -244,6 +244,13 @@ _Filled in during grilling, one entry per answered question._
   (Working #00AEEF, Done #22B14C, Ask #FF8A00) so the icon matches the
   physical LED; Ask also sets `active` (urgent highlight). Tooltip: state,
   active count, top session.
+  *Amended in #5:* those are upstream's menu-bar legend colours, and the
+  device programs use others (Done is solid cyan #00E5FF on the device,
+  Working a cyan roll, Ask amber #FF3A00, Idle dim teal #006060), so the icon
+  did not match the LED. With a device connected and showing Agent, the icon
+  takes the colour its LEDs show now, read from the program on the device (a
+  SidePulse Pro wins, D21); the popup's device rows do the same. Without one,
+  the legend colours above apply.
 - **D13 Settings UI:** all inside the one popup — Sessions (top), Devices
   (per-device on/off, display mode, brightness), Keep awake (policy), and a
   collapsible Settings section (hooks per provider, Bar LEDs on/off, idle

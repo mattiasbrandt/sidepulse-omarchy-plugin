@@ -163,6 +163,19 @@ def test_off_is_not_rewritten_while_the_device_shows_it(home, mounts, monkeypatc
     assert writes == []
 
 
+def test_shown_colour_is_the_first_colour_of_the_program_on_the_device(home, mounts):
+    # What the LEDs show, not the menu-bar legend: upstream's Done program is
+    # cyan while its legend colour for Done is green.
+    device = device_by_name("PulseDot")
+    led = mounts / "PulseDot" / "LEDS.LED"
+    led.write_text("brightness 128\noff 320ms cosine\n0:#00e5ff 760ms pulse 0ms; 1:#00E5FF 760ms pulse 260ms\nrepeat\n")
+    assert helper.shown_colour(device) == "#00E5FF"
+    helper.apply_display(device, "off")
+    assert helper.shown_colour(device) is None  # upstream's off program has no colour
+    led.unlink()
+    assert helper.shown_colour(device) is None
+
+
 def test_brightness_percent_maps_to_upstreams_0_to_255(home, mounts):
     device = device_by_name("SidePulsePro")
     helper.set_device_brightness(device, 40)
@@ -235,6 +248,7 @@ def test_devices_event_lists_the_mounted_products(helper_proc):
     assert by_name["PulseDot"]["led_count"] == 2
     assert by_name["PulseDot"]["display"] == "agent"
     assert by_name["PulseDot"]["percent"] == 100
+    assert "colour" in by_name["PulseDot"]
 
 
 def test_set_displays_off_then_agent_round_trips_through_the_helper(helper_proc, home):

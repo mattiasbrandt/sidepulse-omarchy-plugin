@@ -73,3 +73,32 @@ test("a hook log row reads as time, agent, event and the State it became", () =>
   // A decision that set no State shows a dash, not an empty cell.
   assert.equal(Settings.logText({ time: "10:04:05", provider: "codex", event: "SessionStart", label: "" }).state, "-")
 })
+
+test("the keep-awake choices are upstream's three policies, in its order", () => {
+  assert.deepEqual(Settings.POLICY_CHOICES.map((choice) => choice.value), ["never", "agents", "always"])
+  assert.deepEqual(Settings.POLICY_CHOICES.map((choice) => choice.label), ["Never", "When Agents Work", "Always"])
+  assert.equal(Settings.policyLabel("agents"), "When Agents Work")
+  assert.equal(Settings.policyLabel("sometimes"), "sometimes")
+})
+
+test("a step through the policies stops at the ends", () => {
+  assert.equal(Settings.nextPolicy("never", 1), "agents")
+  assert.equal(Settings.nextPolicy("agents", 1), "always")
+  assert.equal(Settings.nextPolicy("always", 1), "always")
+  assert.equal(Settings.nextPolicy("always", -1), "agents")
+  assert.equal(Settings.nextPolicy("never", -1), "never")
+  assert.equal(Settings.nextPolicy("agents", 0), "agents")
+  // A value this popup does not know starts from the nearest end, as a preset does.
+  assert.equal(Settings.nextPolicy("sometimes", 1), "never")
+})
+
+test("the keep-awake row says whether the lock is held and why", () => {
+  assert.equal(Settings.awakeText(null), "Checking")
+  assert.equal(Settings.awakeText({ holding: true, reason: "agents are working" }), "Holding sleep: agents are working")
+  assert.equal(Settings.awakeText({ holding: false, reason: "no agent is working" }), "Not holding: no agent is working")
+})
+
+test("keep-awake and battery problems have their own titles", () => {
+  assert.equal(Settings.problemTitle("keep_awake"), "Keep awake")
+  assert.equal(Settings.problemTitle("power"), "Battery")
+})

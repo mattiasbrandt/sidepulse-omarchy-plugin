@@ -10,8 +10,8 @@ import "helper/settings.mjs" as Settings
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
-// popup holds Setup (D19), Sessions, Devices, Keep awake (still a placeholder
-// until #7) and the collapsible Settings section (D13).
+// popup holds Setup (D19), Sessions, Devices, Keep awake (D11) and the
+// collapsible Settings section (D13).
 Panel {
   id: root
 
@@ -143,6 +143,13 @@ Panel {
   // updates notifyOnAsk synchronously, so reading it again here would see the new value.
   function toggleNotify() {
     saveEntry("notifyOnAsk", !notifyOnAsk)
+  }
+
+  // Steps the keep-awake policy one choice in direction dx; the helper saves it through upstream (D11).
+  function stepPolicy(dx) {
+    if (HelperProcess.awake === null) return
+    const next = Settings.nextPolicy(HelperProcess.awake.policy, dx)
+    if (next !== HelperProcess.awake.policy) HelperProcess.setPolicy(next)
   }
 
   // The Display each device was last set to, keyed by device id (D9). Stored in
@@ -326,6 +333,8 @@ Panel {
       stepTiming(name, 1)
     } else if (name === "notify") {
       toggleNotify()
+    } else if (name === "keep-awake") {
+      stepPolicy(1)
     }
   }
 
@@ -337,6 +346,7 @@ Panel {
   function stepRow(name, dx) {
     if (name.indexOf("device:") === 0) nudgeBrightness(name.substring(7), dx)
     else if (name === "idle" || name === "retention") stepTiming(name, dx)
+    else if (name === "keep-awake") stepPolicy(dx)
   }
 
   Component.onCompleted: {
@@ -617,9 +627,15 @@ Panel {
               fontFamily: root.fontFamily
             }
 
-            PlaceholderRow {
+            // A stepped value, like the timeouts (D13): the chevrons and the wheel step the policy both ways.
+            // The detail says whether the sleep lock is held now and why; a failure to hold shows under PROBLEMS (D14).
+            SettingRow {
               width: parent.width
               rowName: "keep-awake"
+              stepper: true
+              settingLabel: "Policy"
+              settingDetail: Settings.awakeText(HelperProcess.awake)
+              settingValue: HelperProcess.awake !== null ? Settings.policyLabel(HelperProcess.awake.policy) : ""
             }
           }
 

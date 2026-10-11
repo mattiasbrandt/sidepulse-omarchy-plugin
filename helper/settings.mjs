@@ -52,6 +52,34 @@ export function hookStatus(entry) {
   return entry.hook_events && entry.hook_events.length > 0 ? "Other hooks only" : "Off"
 }
 
+// Keep awake (D11): the policies in upstream's order, with upstream's labels.
+export const POLICY_CHOICES = [
+  { value: "never", label: "Never" },
+  { value: "agents", label: "When Agents Work" },
+  { value: "always", label: "Always" },
+]
+
+export function policyLabel(value) {
+  const choice = POLICY_CHOICES.find((entry) => entry.value === value)
+  return choice ? choice.label : value
+}
+
+// The policy after current in direction step (+1 or -1); the ends stop the walk. A value that is not a
+// choice starts from the nearest end that way.
+export function nextPolicy(current, step) {
+  if (step === 0) return current
+  const at = POLICY_CHOICES.findIndex((entry) => entry.value === current)
+  if (at < 0) return POLICY_CHOICES[step > 0 ? 0 : POLICY_CHOICES.length - 1].value
+  const next = Math.max(0, Math.min(POLICY_CHOICES.length - 1, at + Math.sign(step)))
+  return POLICY_CHOICES[next].value
+}
+
+// The keep-awake row's detail: whether the sleep lock is held now, and why (the helper's `awake` event).
+export function awakeText(awake) {
+  if (!awake) return "Checking"
+  return (awake.holding ? "Holding sleep: " : "Not holding: ") + awake.reason
+}
+
 // The title of a problem line, by the feature the helper reported it for.
 const PROBLEM_TITLES = {
   state: "Agent state",
@@ -63,6 +91,8 @@ const PROBLEM_TITLES = {
   hook_log: "Hook log",
   settings: "Settings",
   notify: "Notifications",
+  keep_awake: "Keep awake",
+  power: "Battery",
   command: "Command",
   protocol: "Protocol",
   watch: "Watching",

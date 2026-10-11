@@ -35,6 +35,7 @@ ln -s "$(realpath "$shell_dir")" "$root/qs"
 mapfile -t qmldirs < <(git ls-files -- '*qmldir')
 qmldir_args=()
 for qmldir in "${qmldirs[@]}"; do qmldir_args+=(-i "$qmldir"); done
+echo "DEBUG qmldirs=${qmldirs[*]} files=${files[*]} root=$root" >&2
 
 "$qmllint" --max-warnings 0 -I "$root" ${qmldir_args[@]+"${qmldir_args[@]}"} "${files[@]}"
 echo "qmllint.sh: ${#files[@]} file(s) clean"

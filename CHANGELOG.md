@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.7.0...v0.8.0) (2026-10-11)
+
+
+### Features
+
+* **widget:** show the battery and the lid on SidePulse devices ([#41](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/41)) ([ef98a5a](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/ef98a5aedb8b7e808dd5026548b019b6b5a12030))
+
 ## [0.7.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.6.0...v0.7.0) (2026-10-11)
 
 

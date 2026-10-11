@@ -181,10 +181,16 @@ _Filled in during grilling, one entry per answered question._
   hotline are, with upstream's blend and tone map (`helper/barleds.mjs`). One band
   per bar window: the first copy of the widget that asks for it holds it
   (`HelperProcess.wantBand`). The position comes from the window, so which copy
-  holds it does not show. A left or right bar draws nothing and the Settings row
-  says so. The band sits below the bar's widgets (negative `z`, above the
+  holds it does not show. The band sits below the bar's widgets (negative `z`, above the
   window's background colour), so marks the bar draws on the same edge, such as
   the open-popup line under a centre widget, stay visible on top of it.
+  *Amended in #38 (vertical bars):* a left or right bar gets the band too, running
+  down its inner edge (the right of a left bar, the left of a right bar), centred
+  on the bar's length. Its canvas is turned a quarter so the LEDs run top to
+  bottom and the hotline faces the desktop (`Band.bandLayout`, node-tested per
+  edge). The Settings row no longer says "top or bottom only". The bar icon
+  stacks the device's LEDs down its glyph on a vertical bar; the popup's hero
+  keeps the horizontal shape.
 - **D8 Session click:** focus the terminal window of the process that
   provably runs the session; resume (user's default terminal via
   `xdg-terminal-exec`, in the session cwd, upstream's resume command) only
@@ -324,6 +330,22 @@ _Filled in during grilling, one entry per answered question._
   reported and counted as unknown (no safeguard), as upstream does. A failed read
   of `latest.json` holds as `BLOCKED_ERROR`, as upstream's refresh error path does.
   The lid state that D10 needs is read in #11, not here.
+  *Amended in #38 (battery safeguard notices):* when the safeguard changes whether
+  the lock is held, the helper sends a desktop notice (`notify-send`, no action, no
+  wait): `Keep awake paused by the battery safeguard: <N> %, unplugged` when it
+  blocks a lock the policy wants, and `Keep awake resumed: plugged in` when Keep awake
+  holds again: once the lock is actually held, not when it is only requested, so a
+  `systemd-inhibit` that cannot start sends no "resumed" (the Keep awake problem line
+  says why), and a request that ends before the lock is held drops it. The trigger is the block itself (`safeguard_blocks`: the policy wants
+  a hold and the safeguard is active), so a falling percent does not re-notify. Under
+  policy Never nothing is evaluated; with no agent working, under When Agents Work,
+  nothing is blocked and nothing is sent. The first read is silent (`safeguard_notice`
+  takes `None` as "not read yet"), so a helper that starts on a low battery does not
+  announce a lock it never held. The notices ignore the Ask switch (`notifyOnAsk`). A
+  missing `notify-send` is the Notifications problem line (the capability probe), and
+  a failed child is reported there too. The notice reads the percent with its decimal
+  as upstream's `format_percent_value` does, and writes the unit with a space.
+  Tests: `tests/test_safeguard_notice.py`.
 - **D12 Bar icon:** always shown. Muted when Idle; upstream state colours
   (Working #00AEEF, Done #22B14C, Ask #FF8A00) so the icon matches the
   physical LED; Ask also sets `active` (urgent highlight). Tooltip: state,
@@ -425,6 +447,9 @@ _Filled in during grilling, one entry per answered question._
   notice's exit is the signal: a click prints `default` and opens the session
   through the D8 path; a dismissed notice opens nothing; a non-zero exit is
   reported in the popup (D14). The helper ends any notice still up when it exits.
+  *Amended in #38:* the battery safeguard's notices (D11) use the same child list with
+  no action and no wait, keyed `None`, so a click on them does nothing and their exit
+  is still read as D14 does. They are not gated by this switch.
 - **D21 The look follows the product (plan review):** popup device rows draw
   a SidePulse Dot (2 LEDs) or SidePulse Pro (8 LEDs) lit live; the Bar LEDs
   match the connected product (2 or 8; 8 with none or both, since upstream
@@ -479,6 +504,8 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   ├── settings.mjs     the Settings section's presets, hook and log wording (*added in #6*)
 │   ├── barleds.mjs      the Bar LEDs' blend and tone map, upstream's constants (*added in #8*)
 │   ├── popup.mjs        which widget copies have their popup open: set-popup's OR (*added in #8*)
+│   ├── status.mjs       the tooltip text and the IPC status() line (*added in #38*)
+│   ├── ipc.mjs          which widget copy owns the IPC target (*added in #38*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
@@ -596,7 +623,19 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 - Icon (D12, D21): always visible; a SidePulse Dot or Pro glyph for the
   connected product (neutral with none); colour by State; Ask → `active`;
   a distinct "needs setup" look while D19 applies. Tooltip: State, active
-  count, top session.
+  count, top session, and `· click for details` (*amended in #38*: the left click
+  is the only action; no right or middle click is added).
+- **IPC (*added in #38*):** the IPC target is the plugin id
+  `io.github.mattiasbrandt.sidepulse` (IPC targets are global in the shell). Calls:
+  `open`, `close`, `show`, `hide`, `toggle` (as the base Panel's), and
+  `status(): string`, one JSON line: `state` (Working, Ask, Done, Idle, or null),
+  `label`, `urgent` (Ask), `active_count`, `top` (the top session's name, or null),
+  `needs_setup`. Before the helper reports, `state` is null and `label` is `not
+  installed` or `starting`, as the tooltip reads. `status()` is answered by the widget
+  from its last helper events, not by the helper. Only one copy owns the target: the
+  first drawn copy (`helper/ipc.mjs`); the center section's zero-size placeholder never
+  does, since Quickshell would keep only one handler and log that the other is unused.
+  Live check: `qs ipc -p /usr/share/omarchy/shell call io.github.mattiasbrandt.sidepulse status`.
 - Popup (D13, D18), keyboard navigable (j/k, Enter, Esc):
   0. **Setup** (only while something is missing, D19).
   1. **Sessions** — up to 10, upstream ordering; row = provider mark,

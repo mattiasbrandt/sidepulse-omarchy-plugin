@@ -1,0 +1,196 @@
+"""Desktop notices for the battery safeguard (D11, amended): one when it lets go of a wanted lock, one when Keep awake holds again.
+
+The notice fires only when the safeguard's block changes (never on the reason text, which
+changes with every percent), not at the first read, under policy Never, or when it blocks
+nothing. A fake notify-send on a scratch PATH stands in for the desktop (test_notify.py).
+"""
+
+from __future__ import annotations
+
+import pytest
+
+import sidepulse_omarchy as helper
+from test_keep_awake import awake_events, battery_tree, clocked, errors_for, send  # noqa: F401  (fixture)
+from test_notify import fake_notify_send, pump_until  # noqa: F401  (fixture)
+
+PAUSED = "Keep awake paused by the battery safeguard: {} %, unplugged"
+RESUMED = "Keep awake resumed: plugged in"
+
+
+@pytest.fixture
+def notifying(clocked, fake_notify_send):
+    """The clocked helper, probed again with the fake notify-send on PATH: the probe runs at hello, which
+    clocked does before fake_notify_send is set up (CI has no real notify-send, so the first probe failed)."""
+    h, out = clocked
+    h.hello()
+    return h, out
+
+
+def summaries(h: helper.Helper, fake_notify_send) -> list[str]:
+    """The text of each notice the fake notify-send was given (its argv minus the app name), once every
+    notice has ended: the notice runs as a child, so its log line is there when the pump has read it."""
+    pump_until(h, lambda: not h.notifications)
+    log = fake_notify_send / "notify.log"
+    if not log.exists():
+        return []
+    return [line.removeprefix("--app-name=SidePulse ") for line in log.read_text().splitlines() if line]
+
+
+# --- The rule itself (pure) ---
+
+
+def test_the_first_read_never_notifies_even_when_the_safeguard_already_blocks():
+    assert helper.safeguard_notice(None, True, False, 15) is None
+    assert helper.safeguard_notice(None, False, True, 15) is None
+
+
+def test_a_new_block_says_paused_with_the_percent():
+    assert helper.safeguard_notice(False, True, False, 19) == PAUSED.format("19")
+
+
+def test_the_percent_keeps_a_decimal_as_upstream_formats_it():
+    assert helper.safeguard_notice(False, True, False, 19.5) == PAUSED.format("19.5")
+
+
+def test_holding_again_says_resumed_plugged_in():
+    assert helper.safeguard_notice(True, False, True, 80) == RESUMED
+
+
+def test_a_block_that_ends_because_agents_stopped_is_silent():
+    assert helper.safeguard_notice(True, False, False, 80) is None
+
+
+def test_no_change_is_silent_so_a_falling_percent_does_not_renotify():
+    assert helper.safeguard_notice(True, True, False, 14) is None
+    assert helper.safeguard_notice(False, False, True, 80) is None
+
+
+def test_policy_never_is_never_blocked_by_the_safeguard():
+    assert helper.safeguard_blocks("never", agents_active=True, safeguard_active=True) is False
+
+
+def test_the_safeguard_blocks_only_a_lock_the_policy_wants():
+    assert helper.safeguard_blocks("agents", agents_active=False, safeguard_active=True) is False
+    assert helper.safeguard_blocks("agents", agents_active=True, safeguard_active=True) is True
+    assert helper.safeguard_blocks("always", agents_active=False, safeguard_active=True) is True
+    assert helper.safeguard_blocks("always", agents_active=False, safeguard_active=False) is False
+
+
+# --- The helper, with a fake battery and a fake notify-send ---
+
+
+def test_pause_then_resume_send_one_notice_each_and_nothing_between(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    assert summaries(h, fake_notify_send) == []
+
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    h.power_root = battery_tree(tmp_path / "power", percent=14, plugged=False)
+    h.refresh_awake()
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=True)
+    h.refresh_awake()
+    h.refresh_awake()
+
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15"), RESUMED]
+
+
+def test_the_notices_are_plain_notices_without_an_action(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15")]
+    argv = (fake_notify_send / "notify.log").read_text().split("\n")[0]
+    assert "--action" not in argv and "--wait" not in argv
+
+
+def test_a_helper_that_starts_already_blocked_stays_quiet_until_it_changes(notifying, tmp_path, fake_notify_send):
+    h, out = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    assert awake_events(out)[-1]["holding"] is False
+    assert summaries(h, fake_notify_send) == []
+
+
+def test_agents_policy_with_no_agent_working_is_silent_under_the_safeguard(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "agents"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    assert summaries(h, fake_notify_send) == []
+
+
+def test_policy_never_sends_nothing_even_when_the_battery_is_low(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "never"})
+    h.refresh_awake()
+    assert summaries(h, fake_notify_send) == []
+
+
+def test_the_notices_ignore_the_ask_notice_switch(notifying, tmp_path, fake_notify_send):
+    h, _ = notifying
+    assert h.notify_on_ask is False
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15")]
+
+
+def test_missing_notify_send_sends_nothing_and_the_problem_line_says_why(clocked, tmp_path, monkeypatch):
+    h, out = clocked
+    monkeypatch.setenv("PATH", str(tmp_path))
+    h.hello()
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    assert h.notifications == []
+    assert any("notify-send" in message for message in errors_for(out, "notify"))
+
+
+def test_resume_waits_for_the_lock_to_be_held(notifying, tmp_path, fake_notify_send, monkeypatch):
+    # The safeguard clears but systemd-inhibit cannot start: no "resumed" beside the Keep awake problem line.
+    h, out = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    working = helper.inhibit_argv
+    monkeypatch.setattr(helper, "inhibit_argv", lambda: ["/nonexistent/systemd-inhibit"])
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=True)
+    h.refresh_awake()
+    assert awake_events(out)[-1]["holding"] is False
+    assert any("cannot run systemd-inhibit" in m for m in errors_for(out, "keep_awake"))
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15")]
+
+    # The lock is held on a later read: the pending resume is sent then, once.
+    monkeypatch.setattr(helper, "inhibit_argv", working)  # not undo(): that drops the fixtures' PATH too
+    h.inhibitor.failed = None  # what a later retry sees once the command works again
+    h.refresh_awake()
+    h.refresh_awake()
+    assert awake_events(out)[-1]["holding"] is True
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15"), RESUMED]
+
+
+def test_a_pending_resume_is_dropped_when_keep_awake_stops_wanting_the_lock(notifying, tmp_path, fake_notify_send,
+                                                                          monkeypatch):
+    h, _ = notifying
+    h.power_root = battery_tree(tmp_path / "power", percent=50, plugged=False)
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=False)
+    h.refresh_awake()
+    working = helper.inhibit_argv
+    monkeypatch.setattr(helper, "inhibit_argv", lambda: ["/nonexistent/systemd-inhibit"])
+    h.power_root = battery_tree(tmp_path / "power", percent=15, plugged=True)
+    h.refresh_awake()
+    send(h, {"cmd": "set-policy", "policy": "never"})
+    monkeypatch.setattr(helper, "inhibit_argv", working)  # not undo(): that drops the fixtures' PATH too
+    send(h, {"cmd": "set-policy", "policy": "always"})
+    h.refresh_awake()
+    assert summaries(h, fake_notify_send) == [PAUSED.format("15")]

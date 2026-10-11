@@ -3,11 +3,13 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "helper"
 import "helper/sessions.mjs" as Sessions
 import "helper/settings.mjs" as Settings
+import "helper/status.mjs" as Status
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
@@ -60,15 +62,12 @@ Panel {
       ? dim
       : agentState.colour
 
-  readonly property string tooltipText: {
-    if (HelperProcess.notInstalled) return "SidePulse: not installed"
-    if (!agentState) return "SidePulse: starting"
-    let text = "SidePulse: " + agentState.label
-    if (agentState.active_count > 0) text += ", " + agentState.active_count + " active"
-    if (agentState.top) text += ", " + agentState.top.display_name
-    if (needsSetup) text += " (setup needed)"
-    return text
-  }
+  // The tooltip ends in "· click for details", the left click's only action (helper/status.mjs).
+  readonly property string tooltipText: Status.tooltipText({
+    notInstalled: HelperProcess.notInstalled,
+    agentState: agentState,
+    needsSetup: needsSetup
+  })
 
   readonly property string heroMeta: {
     if (HelperProcess.notInstalled) return "Not installed"
@@ -105,7 +104,6 @@ Panel {
   readonly property string barLedsDetail: {
     const cap = HelperProcess.capabilities ? HelperProcess.capabilities.bar_leds : undefined
     if (cap && cap.ok === false) return "Unavailable until the problem above is fixed."
-    if (bar && (bar.position === "left" || bar.position === "right")) return "Drawn on a top or bottom bar only."
     return "SidePulse's setting. The LEDs show along the bar's inner edge."
   }
   readonly property real idleSeconds: HelperProcess.settings !== null ? HelperProcess.settings.idle_timeout_seconds : 0
@@ -355,10 +353,21 @@ Panel {
     else if (name === "keep-awake") stepPolicy(dx)
   }
 
+  // The bar's ModuleSlot holding this copy (the parent of the Loader that loads it). A copy is drawn when
+  // the slot is visible and has size, as BarModel.js isDrawnSlot decides; the center section's zero-size
+  // placeholder is not (Bar.qml, "a zero-size placeholder"). Without a slot, the copy's own size decides.
+  readonly property var slot: parent && parent.parent ? parent.parent : null
+  readonly property bool drawn: slot !== null
+    ? slot.visible === true && slot.width > 0 && slot.height > 0
+    : visible && width > 0 && height > 0
+
   Component.onCompleted: {
     HelperProcess.pythonPath = pythonSetting
     HelperProcess.register()
+    HelperProcess.claimIpc(root, drawn)
   }
+
+  onDrawnChanged: HelperProcess.claimIpc(root, drawn)
 
   // A helper that has just started knows no displays or notice setting yet: send
   // what was remembered, and send again whenever the remembered values change
@@ -387,7 +396,29 @@ Panel {
 
   Component.onDestruction: {
     HelperProcess.setPopupOpen(root, false)
+    HelperProcess.releaseIpc(root)
     HelperProcess.unregister()
+  }
+
+  // The IPC target is the plugin id (IPC targets are global in the shell). Only the owning copy
+  // registers it (HelperProcess.ipcOwner), so the anchor placeholder never answers. The base Panel's
+  // handler stays off (no ipcTarget); this one keeps its five calls and adds status() (docs/spec.md).
+  IpcHandler {
+    enabled: HelperProcess.ipcOwner() === root
+    target: root.moduleName
+
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function status(): string {
+      return Status.statusJson({
+        notInstalled: HelperProcess.notInstalled,
+        agentState: root.agentState,
+        needsSetup: root.needsSetup
+      })
+    }
   }
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 
@@ -418,52 +449,61 @@ Panel {
   // Our own shapes (D22): a device outline with its LEDs (D21: one neutral LED
   // with no device, 2 for a SidePulse Dot, 8 for a SidePulse Pro). The setup
   // look is the same glyph at half opacity with a dot in the urgent colour.
+  // The popup's hero draws the glyph across; the bar icon on a left or right bar draws it down (D22, vertical bars).
   readonly property Component glyphComponent: Component {
-    Item {
-      id: glyph
-      opacity: root.needsSetup ? 0.5 : 1.0
-      readonly property real ledSize: Style.space(2)
-      readonly property real ledGap: Style.space(1)
-      readonly property real ledsWidth: root.iconLedCount * ledSize + (root.iconLedCount - 1) * ledGap
+    GlyphShape {}
+  }
+  readonly property Component barGlyphComponent: Component {
+    GlyphShape { vertical: root.bar ? root.bar.vertical === true : false }
+  }
 
-      Rectangle {
-        anchors.centerIn: parent
-        width: Math.max(Style.space(12), glyph.ledsWidth + Style.space(4))
-        height: Style.space(8)
-        radius: height / 2
-        color: "transparent"
-        border.width: Math.max(1, Style.space(1))
-        border.color: root.glyphColour
-      }
+  component GlyphShape: Item {
+    id: glyph
+    property bool vertical: false
+    opacity: root.needsSetup ? 0.5 : 1.0
+    readonly property real ledSize: Style.space(2)
+    readonly property real ledGap: Style.space(1)
+    readonly property real ledsLength: root.iconLedCount * ledSize + (root.iconLedCount - 1) * ledGap
+    readonly property real pillLength: Math.max(Style.space(12), ledsLength + Style.space(4))
 
-      Row {
-        anchors.centerIn: parent
-        spacing: glyph.ledGap
+    Rectangle {
+      anchors.centerIn: parent
+      width: glyph.vertical ? Style.space(8) : glyph.pillLength
+      height: glyph.vertical ? glyph.pillLength : Style.space(8)
+      radius: Math.min(width, height) / 2
+      color: "transparent"
+      border.width: Math.max(1, Style.space(1))
+      border.color: root.glyphColour
+    }
 
-        Repeater {
-          model: root.iconLedCount
+    Grid {
+      anchors.centerIn: parent
+      spacing: glyph.ledGap
+      columns: glyph.vertical ? 1 : root.iconLedCount
 
-          Rectangle {
-            required property int index
-            // The device's live frame (D12), as its popup row draws it; without one, the State's colour.
-            readonly property var led: HelperProcess.iconLeds ? HelperProcess.iconLeds[index] : null
-            width: glyph.ledSize
-            height: width
-            radius: width / 2
-            color: led ? Qt.rgba(led[0] / 255, led[1] / 255, led[2] / 255, 1) : root.glyphColour
-          }
+      Repeater {
+        model: root.iconLedCount
+
+        Rectangle {
+          required property int index
+          // The device's live frame (D12), as its popup row draws it; without one, the State's colour.
+          readonly property var led: HelperProcess.iconLeds ? HelperProcess.iconLeds[index] : null
+          width: glyph.ledSize
+          height: width
+          radius: width / 2
+          color: led ? Qt.rgba(led[0] / 255, led[1] / 255, led[2] / 255, 1) : root.glyphColour
         }
       }
+    }
 
-      Rectangle {
-        visible: root.needsSetup
-        anchors.right: parent.right
-        anchors.top: parent.top
-        width: Style.space(3)
-        height: width
-        radius: width / 2
-        color: root.urgent
-      }
+    Rectangle {
+      visible: root.needsSetup
+      anchors.right: parent.right
+      anchors.top: parent.top
+      width: Style.space(3)
+      height: width
+      radius: width / 2
+      color: root.urgent
     }
   }
 
@@ -474,7 +514,7 @@ Panel {
     tooltipText: root.tooltipText
     // Ask lights the icon with the urgent highlight (D12).
     active: root.agentState !== null && root.agentState.urgent === true
-    iconComponent: root.glyphComponent
+    iconComponent: root.barGlyphComponent
 
     onPressed: function (buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()

@@ -49,7 +49,8 @@ the change, then put the bar back exactly as it was:
 ```sh
 scripts/live-check.sh up     # back up shell.json, install, enable, restart the shell
 scripts/live-check.sh sync   # after each edit: install again, restart the shell
-scripts/live-check.sh down   # remove it; restores shell.json from the backup if needed
+scripts/live-check.sh position left   # move the bar to top|bottom|left|right for a check
+scripts/live-check.sh down   # remove it; restores shell.json from the backup if needed (also puts the bar back)
 ```
 
 The script restarts the shell instead of relying on hot reload, which never

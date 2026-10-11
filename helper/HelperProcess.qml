@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "lifecycle.mjs" as Lifecycle
+import "ipc.mjs" as Ipc
 import "popup.mjs" as Popup
 
 // The one helper process for the whole shell (D5). Each widget copy registers
@@ -139,6 +140,22 @@ Item {
   function wantBand(owner, window, wants) {
     const others = bandClaims.filter(function (claim) { return claim.owner !== owner })
     bandClaims = wants && window ? others.concat([{ owner: owner, window: window }]) : others
+  }
+
+  // The widget copies that claim the IPC target (D5), each with whether it is drawn. Quickshell keeps one
+  // handler per target, so only ipcOwner() enables its IpcHandler (helper/ipc.mjs).
+  property var ipcClaims: []
+
+  function claimIpc(owner, drawn) {
+    ipcClaims = Ipc.withIpcClaim(ipcClaims, owner, drawn)
+  }
+
+  function releaseIpc(owner) {
+    ipcClaims = Ipc.withoutIpcClaim(ipcClaims, owner)
+  }
+
+  function ipcOwner() {
+    return Ipc.ipcOwner(ipcClaims)
   }
 
   // A widget copy's popup opened (isOpen) or closed, or the copy went away (false). Sends the OR on change.

@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "lifecycle.mjs" as Lifecycle
+import "popup.mjs" as Popup
 
 // The one helper process for the whole shell (D5). Each widget copy registers
 // on creation and unregisters on destruction. When the process starts, stops
@@ -50,6 +51,11 @@ Item {
   property var deviceLeds: ({})
   // The Bar LEDs' copies that want the band, in the order they asked: the first per bar window holds it.
   property var bandClaims: []
+  // The widget copies whose popup is open (popup.mjs). The helper gets their OR as set-popup, so device
+  // frames flow only while a popup shows the device rows. popupSent is what it last got; null until the
+  // current helper has said hello.
+  property var openPopups: []
+  property var popupSent: null
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -95,6 +101,7 @@ Item {
     awake = null
     barLeds = null
     deviceLeds = ({})
+    popupSent = null  // the next helper is told again
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -127,6 +134,19 @@ Item {
     bandClaims = wants && window ? others.concat([{ owner: owner, window: window }]) : others
   }
 
+  // A widget copy's popup opened (isOpen) or closed, or the copy went away (false). Sends the OR on change.
+  function setPopupOpen(owner, isOpen) {
+    openPopups = Popup.withOpenPopup(openPopups, owner, isOpen)
+    sendPopup()
+  }
+
+  function sendPopup() {
+    const open = Popup.anyPopupOpen(openPopups)
+    if (!helloReceived || open === popupSent) return
+    popupSent = open
+    send({ cmd: "set-popup", open: open })
+  }
+
   // The copy holding the band of this window, or null.
   function bandHolder(window) {
     for (let i = 0; i < bandClaims.length; i++) {
@@ -157,6 +177,8 @@ Item {
     if (event.type === "hello") {
       helloReceived = true
       capabilities = event.capabilities
+      popupSent = null  // a fresh helper starts closed: tell it what the popups are
+      sendPopup()
       apply(Lifecycle.hello(life))
     } else if (event.type === "state") {
       agentState = event

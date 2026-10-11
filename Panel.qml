@@ -385,7 +385,10 @@ Panel {
     }
   }
 
-  Component.onDestruction: HelperProcess.unregister()
+  Component.onDestruction: {
+    HelperProcess.setPopupOpen(root, false)
+    HelperProcess.unregister()
+  }
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 
   // A result from an earlier open is stale once the popup opens again.
@@ -397,15 +400,19 @@ Panel {
     }
   }
 
-  onOpenedChanged: if (opened) {
-    cursorActive = false
-    cursorIndex = 0
-    nowMs = Date.now()
-    HelperProcess.lastResult = null
-    hookBusy = ""
-    if (panelFlick) panelFlick.contentY = 0
-    HelperProcess.refresh()
-    Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+  // The helper streams the device rows' frames only while a popup is open (set-popup, D21).
+  onOpenedChanged: {
+    HelperProcess.setPopupOpen(root, opened)
+    if (opened) {
+      cursorActive = false
+      cursorIndex = 0
+      nowMs = Date.now()
+      HelperProcess.lastResult = null
+      hookBusy = ""
+      if (panelFlick) panelFlick.contentY = 0
+      HelperProcess.refresh()
+      Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+    }
   }
 
   // Our own shapes (D22): a device outline with its LEDs (D21: one neutral LED

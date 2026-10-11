@@ -147,3 +147,36 @@ def test_session_without_id_is_listed_but_not_resumable():
 
 def test_unavailable_state_lists_no_sessions():
     assert helper.sessions_event([]) == {"type": "sessions", "items": []}
+
+
+# --- Finished sessions whose folder is gone (worker worktrees, deleted checkouts) ---
+
+def test_a_finished_session_whose_folder_is_gone_is_not_listed(tmp_path):
+    here = tmp_path / "project"
+    here.mkdir()
+    snapshot = _snapshot([
+        _status("codex:gone", AgentMode.COMPLETED, 60, session_id="gone", provider="codex", cwd=str(tmp_path / "deleted")),
+        _status("codex:here", AgentMode.COMPLETED, 90, session_id="here", provider="codex", cwd=str(here)),
+        _status("claude:nocwd", AgentMode.COMPLETED, 120, session_id="nocwd", cwd=None),
+    ])
+    assert _ids(helper.listed_sessions(snapshot, DEFAULT_RECENT_SESSION_RETENTION_SECONDS)) == ["codex:here", "claude:nocwd"]
+
+
+def test_a_running_or_asking_session_is_listed_even_when_its_folder_is_gone(tmp_path):
+    gone = str(tmp_path / "deleted")
+    snapshot = _snapshot([
+        _status("claude:working", AgentMode.WORKING, 10, session_id="w", cwd=gone),
+        _status("codex:asking", AgentMode.WAITING_FOR_INPUT, 20, session_id="a", provider="codex", cwd=gone),
+    ])
+    assert sorted(_ids(helper.listed_sessions(snapshot, DEFAULT_RECENT_SESSION_RETENTION_SECONDS))) == [
+        "claude:working", "codex:asking"]
+
+
+def test_gone_sessions_do_not_use_up_the_ten_rows(tmp_path):
+    here = tmp_path / "project"
+    here.mkdir()
+    gone = [_status(f"codex:g{i}", AgentMode.COMPLETED, 10 + i, session_id=f"g{i}", provider="codex",
+                    cwd=str(tmp_path / "deleted")) for i in range(10)]
+    kept = [_status(f"claude:k{i}", AgentMode.COMPLETED, 100 + i, session_id=f"k{i}", cwd=str(here)) for i in range(3)]
+    listed = helper.listed_sessions(_snapshot(gone + kept), DEFAULT_RECENT_SESSION_RETENTION_SECONDS)
+    assert _ids(listed) == ["claude:k0", "claude:k1", "claude:k2"]

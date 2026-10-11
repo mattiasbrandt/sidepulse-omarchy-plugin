@@ -1382,6 +1382,22 @@ def recent_statuses(snapshot: Any, retention_seconds: float, limit: int = SESSIO
     return ordered[:limit]
 
 
+def listed_sessions(snapshot: Any, retention_seconds: float, limit: int = SESSION_LIMIT) -> list[Any]:
+    """The popup's sessions: upstream's recent_statuses without the finished sessions whose folder is gone.
+
+    A finished session in a deleted folder (a removed worktree or checkout) cannot be resumed (D8), so
+    it only crowds the list. It is dropped before the limit, so it does not take a row. A running or
+    asking session always shows, whatever its folder; one with no folder recorded shows too.
+    """
+    from sidepulse.models import AgentMode
+
+    everything = recent_statuses(snapshot, retention_seconds,
+                                 limit=len(snapshot.statuses) + len(snapshot.stale_statuses))
+    kept = [status for status in everything
+            if status.mode != AgentMode.COMPLETED or not status.cwd or os.path.isdir(status.cwd)]
+    return kept[:limit]
+
+
 def sessions_event(statuses: list[Any]) -> dict[str, Any]:
     """The popup's Sessions rows. updated_ms lets the popup age them; the helper sends nothing per second."""
     items = []
@@ -1810,7 +1826,7 @@ class Helper:
             self.active_count = snapshot.aggregate.active_count
             self.state_readable = True
             if self.capabilities["sessions"]["ok"]:
-                statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
+                statuses = listed_sessions(snapshot, settings.recent_session_retention_seconds)
             self.note_asks(asking_sessions(snapshot.statuses))
         if force or event != self.last_state:
             self.last_state = event

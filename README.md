@@ -64,7 +64,9 @@ The bar icon's colour follows the agents' State, and its tooltip ends in
 `· click for details`. A left click is the only mouse action.
 
 **Sessions** lists up to ten recent agent sessions, in SidePulse's order: the most
-urgent first. Enter or a click on a session:
+urgent first. A finished session whose folder no longer exists (a deleted worktree or
+checkout) is left out, since it cannot be resumed. **Keep finished sessions** in
+Settings sets how long Done sessions stay. Enter or a click on a session:
 
 - a running session focuses its window. If it runs inside herdr or tmux, the
   popup focuses its pane, and opens a terminal attached to the multiplexer when

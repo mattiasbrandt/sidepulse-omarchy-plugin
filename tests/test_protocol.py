@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -114,6 +115,14 @@ def test_first_state_and_setup_follow_hello(helper_proc):
 def test_exits_cleanly_when_stdin_closes(helper_proc):
     helper_proc.event_matching(lambda e: e["type"] == "state")
     assert helper_proc.close_stdin() == 0
+
+
+def test_exits_cleanly_on_sigterm(helper_proc):
+    # Quickshell stops a Process with SIGTERM: the helper must leave through its cleanup (handing devices
+    # back, dropping the sleep lock), not die mid-loop with the default action (exit status -15).
+    helper_proc.event_matching(lambda e: e["type"] == "state")
+    helper_proc.proc.send_signal(signal.SIGTERM)
+    assert helper_proc.proc.wait(timeout=TIMEOUT) == 0
 
 
 def test_state_follows_latest_json_when_it_changes(helper_proc):

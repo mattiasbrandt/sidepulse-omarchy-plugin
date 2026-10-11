@@ -126,9 +126,10 @@ def test_agent_hands_the_device_back_to_the_service_without_writing(home, mounts
 
 
 def test_a_remembered_display_the_helper_does_not_offer_falls_back_to_agent():
-    # Battery joins with #11; until then, and on a machine without a battery, a
-    # remembered "battery" means Agent.
-    assert helper.display_of({"dev": "battery"}, "dev") == "agent"
+    # Upstream's "custom" is not a Display; a remembered "battery" on a machine without a battery means Agent (D9).
+    assert helper.display_of({"dev": "custom"}, "dev") == "agent"
+    assert helper.display_of({"dev": "battery"}, "dev", battery_offered=False) == "agent"
+    assert helper.display_of({"dev": "battery"}, "dev") == "battery"
     assert helper.display_of({"dev": "off"}, "dev") == "off"
     assert helper.display_of({}, "dev") == "agent"
 

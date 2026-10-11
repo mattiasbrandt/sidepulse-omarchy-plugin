@@ -45,6 +45,9 @@ Item {
   property var settings: null
   // The keep-awake policy, whether the sleep lock is held and why (D11); null until the helper reports.
   property var awake: null
+  // The battery and the lid (D10), as the helper last read them; null until it reports. battery_offered
+  // says whether the Battery Display is on offer (D9).
+  property var power: null
   // The Bar LEDs' colours, [r, g, b] per LED, or null when nothing is drawn (D6, D7), and each
   // device's colours by device id (the popup's device rows). Replaced on each frame that changed.
   property var barLeds: null
@@ -101,6 +104,7 @@ Item {
     hookLog = []
     settings = null
     awake = null
+    power = null
     barLeds = null
     iconLeds = null
     deviceLeds = ({})
@@ -201,6 +205,8 @@ Item {
       settings = event
     } else if (event.type === "awake") {
       awake = event
+    } else if (event.type === "power") {
+      power = event
     } else if (event.type === "frame") {
       applyFrame(event)
     } else if (event.type === "result") {

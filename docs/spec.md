@@ -270,6 +270,17 @@ _Filled in during grilling, one entry per answered question._
   service can write an agent program it planned before reading `custom`
   (`service.sync_outputs` reads settings, then writes). Brightness goes
   through upstream's `with_device_brightness` (0-255; the widget sends percent).
+  *Amended in #11 (Battery):* `battery` is a third Display, offered only where the
+  helper reads a battery (`power` event, `battery_offered`); a remembered `battery`
+  without one means Agent. Battery is a takeover like Off: the helper sets `custom`
+  and writes upstream's `program_for_battery` at the device's brightness whenever
+  the device shows anything else, and hands the device back to `agent` when the
+  Display changes or the helper exits (`release_takeovers`). Plugging or unplugging
+  takes an Agent device the same way for upstream's preview window
+  (`battery_show_on_power_change`, 7 s). An unreadable battery under Battery shows
+  the device dark and reports `power` (D14), never the last value. Off stays Off on
+  exit. A crash mid-takeover is repaired by the next reconcile, which re-derives
+  upstream's value from the remembered Display.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -277,6 +288,18 @@ _Filled in during grilling, one entry per answered question._
   showing, with the device in Manual (`custom`) mode so the service doesn't
   fight it, then hands back. This overrides D4's "shape each gap as an
   upstream PR" for these features.
+  *Amended in #11:* the lid state is logind's `LidClosed`, read with
+  `busctl get-property` (the same logind the keep-awake lock uses); no other lid
+  reader exists. Upstream's two lid rules (`lid_closed_led_state_should_hold`,
+  `lid_close_animation_should_run`) are copied and AST-checked, since status_bar.py
+  is PyObjC. The animations are upstream's lid settings (`settings.lid_animation`),
+  played at the device's brightness for their duration plus upstream's 0.15 s. Closing
+  plays only where upstream lets the machine sleep. While the closed lid may sleep the
+  LEDs stay dark; upstream latches that state at the transition, the helper
+  recomputes it each tick, so it cannot latch. Battery reader: the first present
+  battery, as D11. Linux has no adapter wattage, so while charging `power_now` stands
+  in for it (it sets upstream's charging pulse speed). Not checked on hardware: the
+  laptop checklist for #9.
 - **D11 Keep-awake scope (Mac parity):** helper holds
   `systemd-inhibit --what=sleep:handle-lid-switch` while upstream's predicate
   says hold (Working/Tool Running/Long Task, 300 s grace after
@@ -300,7 +323,7 @@ _Filled in during grilling, one entry per answered question._
   online adapter or a charging battery is plugged in. An unreadable battery is
   reported and counted as unknown (no safeguard), as upstream does. A failed read
   of `latest.json` holds as `BLOCKED_ERROR`, as upstream's refresh error path does.
-  Lid state from logind is left to #11 with the other laptop display features.
+  The lid state that D10 needs is read in #11, not here.
 - **D12 Bar icon:** always shown. Muted when Idle; upstream state colours
   (Working #00AEEF, Done #22B14C, Ask #FF8A00) so the icon matches the
   physical LED; Ask also sets `active` (urgent highlight). Tooltip: state,
@@ -317,6 +340,9 @@ _Filled in during grilling, one entry per answered question._
   The icon follows the product it is drawn as: a SidePulse Pro if one is
   connected, else the first device. With that device Off, or no device, or no
   frames (the Bar LEDs' engine is unavailable), the colours above apply.
+  *Amended in #11:* the icon follows its device's program, not its Display, so a
+  device on Battery (and during a lid or preview takeover) draws its battery or
+  animation frames as the row does. Only Off, or no device, falls back.
 - **D13 Settings UI:** all inside the one popup — Sessions (top), Devices
   (per-device on/off, display mode, brightness), Keep awake (policy), and a
   collapsible Settings section (hooks per provider, Bar LEDs on/off, idle
@@ -415,6 +441,9 @@ _Filled in during grilling, one entry per answered question._
   scaling by the device's brightness, since a screen pixel at a few percent is
   black where a real LED still shines; the brightness slider shows the brightness.
   Those frames flow only while a popup is open (the `set-popup` gate, below).
+  *Amended in #11:* the row plays what its device holds, so a device on Battery
+  (or in a lid or preview takeover) shows its battery program at full brightness
+  too; the Bar LEDs stay on the State.
   The device's file is read on each tick, so a change of program reaches the row
   within a second; its animation frames run live.
 - **D22 Own artwork (plan review):** product drawings are our own vector
@@ -520,6 +549,12 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   `systemd-inhibit --what=sleep:handle-lid-switch --mode=block` child while
   the predicate says hold; LED handover for battery/lid display (device to
   `custom`, write program, restore afterwards).
+  *Amended in #11:* the `power` event (`battery_present`, `percent`, `plugged`,
+  `lid_closed`, `battery_offered`; re-sent on change), the `battery` and `lid`
+  capabilities (`lid` also needs `busctl` on PATH), and the `battery` value of
+  `set-displays`. Each tick reads the battery and the lid once; the devices are
+  reconciled right after, and a preview or lid animation's end wakes the loop, so a
+  takeover ends on time. Takeovers are released on exit.
   *Amended in #7:* the keep-awake part is in place: the `awake` event (`policy`,
   `holding`, `reason`; re-sent on change, the predicate re-runs every tick), the
   `set-policy` command (`policy`: never, agents, always; saved through upstream's

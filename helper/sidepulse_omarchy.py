@@ -12,9 +12,11 @@ Events (stdout):
   result    outcome of a command that changes something (start-service)
   error     a feature failed or a command was refused; the message says why
   clear     a feature reported by error has recovered
-  devices   connected SidePulse devices: id, product, LED count, remembered
-            Display (agent, off), brightness percent and the colour its LEDs
-            show now (null when dark)
+  devices   connected SidePulse devices: id, product, LED count, Display (agent,
+            battery, off; the effective one), brightness percent and the colour
+            its LEDs show now (null when dark)
+  power     the battery (present, percent, plugged), the lid (closed, null when
+            unknown) and whether the Battery Display is offered (D10)
   hooks     each agent's hook config: whether it exists and has SidePulse's hooks
   log       the last hook decision rows: provider, event, the State it became
   settings  idle timeout, session retention and the Bar LEDs switch (upstream's)
@@ -51,6 +53,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -78,10 +81,11 @@ PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok", "cu
 NOTIFY_REASON = "notify-send is not installed; the Ask notifications need it (libnotify)"
 INSTALL_COMMAND = "curl -fsSL https://sidepulse.io/setup.sh | bash"
 # A device's Display (D9). Upstream stores only Agent or Manual ("custom") on
-# Linux, so Off holds the device in Manual. Battery joins with #11.
-DISPLAYS = ("agent", "off")
+# Linux, so Battery and Off hold the device in Manual while the helper drives
+# it (Battery, D10) or the user keeps it dark (Off).
+DISPLAYS = ("agent", "battery", "off")
 DEFAULT_DISPLAY = "agent"
-UPSTREAM_DISPLAY = {"agent": "agent", "off": "custom"}
+UPSTREAM_DISPLAY = {"agent": "agent", "battery": "custom", "off": "custom"}
 PRODUCT_NAMES = {"dot": "SidePulse Dot", "pro": "SidePulse Pro"}
 # LED frames (D6): upstream's virtual_device.py FRAME_RATE and IDLE_FRAME_RATE. A
 # drift test in tests/test_bar_leds.py reads both from upstream's source.
@@ -153,6 +157,19 @@ REQUIRED_NAMES = {
         "sidepulse.battery": ("BatterySnapshot",),
         "sidepulse.settings": ("load_settings", "SLEEP_PREVENTION_CHOICES"),
     },
+    # The Battery display and its 7 s preview (D9, D10): upstream's battery program and its settings.
+    "battery": {
+        "sidepulse.battery": ("BatterySnapshot", "program_for_battery", "DEFAULT_POWER_CHANGE_PREVIEW_SECONDS"),
+        "sidepulse.settings": ("LED_DISPLAY_BATTERY", "AgentMonitorSettings.battery_show_on_power_change",
+                               "AgentMonitorSettings.battery_power_change_preview_seconds"),
+    },
+    # The lid animations (D10): upstream's lid settings and LED text helpers. busctl is probed in probe_capabilities.
+    "lid": {
+        "sidepulse.settings": ("LID_ANIMATION_CLOSED", "LID_ANIMATION_OPEN", "AgentMonitorSettings.lid_animation",
+                               "AgentMonitorSettings.sleep_prevention_policy"),
+        "sidepulse.device_writer": ("normalize_led_text", "validate_led_text", "DeviceWriteError"),
+        "sidepulse.led_status": ("apply_brightness", "builtin_animation_program"),
+    },
     # The Bar LEDs' frames (D6): upstream's engine resource and error names, its programs and its animation settings.
     # The wasmtime package and the packaged sdled.wasm are probed separately, in probe_capabilities.
     "bar_leds": {
@@ -169,6 +186,12 @@ SLEEP_PREVENTION_AGENTS = "agents"
 SLEEP_PREVENTION_ALWAYS = "always"
 SLEEP_PREVENTION_CHOICES = (SLEEP_PREVENTION_NEVER, SLEEP_PREVENTION_AGENTS, SLEEP_PREVENTION_ALWAYS)
 POWER_SUPPLY_ROOT = Path("/sys/class/power_supply")
+# logind's LidClosed property (D10); busctl prints "b true" or "b false".
+LID_COMMAND = ("busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
+               "org.freedesktop.login1.Manager", "LidClosed")
+LID_REASON = "busctl is not installed; the lid animations need it (systemd)"
+# Upstream holds a lid animation this long past its duration (status_bar.py LID_ANIMATION_RESTORE_FUDGE_SECONDS).
+LID_ANIMATION_FUDGE_SECONDS = 0.15
 INHIBIT_WHAT = "sleep:handle-lid-switch"
 INHIBIT_WHO = "SidePulse"
 INHIBIT_WHY = "Keeping the machine awake while agents work"
@@ -204,6 +227,8 @@ def probe_capabilities() -> dict[str, dict[str, Any]]:
         caps["keep_awake"] = _probe_inhibit()
     if caps["bar_leds"]["ok"]:
         caps["bar_leds"] = _probe_bar_leds()
+    if caps["lid"]["ok"] and shutil.which(LID_COMMAND[0]) is None:
+        caps["lid"] = {"ok": False, "reason": LID_REASON}
     caps["notify"] = _probe_notify()
     return caps
 
@@ -571,34 +596,40 @@ def notify_argv(summary: str, body: str) -> list[str]:
     return ["notify-send", "--app-name=SidePulse", "--wait", f"--action={NOTIFY_ACTION}=Open session", summary, body]
 
 
-def display_of(displays: dict[str, str], device_id: str) -> str:
+def display_of(displays: dict[str, str], device_id: str, battery_offered: bool = True) -> str:
     """The widget's remembered Display for a device: Agent when none is
-    remembered, or when the value is not one this helper offers."""
+    remembered, when the value is not one this helper offers, or when it is
+    Battery and there is no battery (D9)."""
     display = displays.get(device_id, DEFAULT_DISPLAY)
-    return display if display in DISPLAYS else DEFAULT_DISPLAY
+    if display not in DISPLAYS or (display == "battery" and not battery_offered):
+        return DEFAULT_DISPLAY
+    return display
 
 
-def apply_display(device: Device, display: str) -> None:
-    """Bring one device to its remembered Display (D9).
+def apply_display(device: Device, display: str, program: str | None = None) -> None:
+    """Bring one device to its Display (D9), driving it with `program` while the helper takes its LEDs (D10).
 
-    Agent: upstream's `agent`, so the service repaints within its next poll.
-    Off: upstream's `custom` (Manual), so the service stops writing, and the
-    device is checked on every tick: the service may write an agent program it
-    planned before reading `custom`, so whenever the device no longer shows
-    upstream's off program it is written again.
+    Agent with no program: upstream's `agent`, so the service repaints within its next poll.
+    Off: upstream's `custom` (Manual) with the off program. A Battery or lid takeover
+    passes its program: upstream's `custom`, with that program written.
+    Whenever the device is Manual and no longer shows what it should, the program is
+    written again on the next tick: the service may write an agent program it planned
+    before reading `custom`.
     """
     from sidepulse.led_status import builtin_animation_program
-    from sidepulse.device_writer import write_led_program
+    from sidepulse.device_writer import normalize_led_text, write_led_program
     from sidepulse.settings import load_settings
 
-    upstream = UPSTREAM_DISPLAY[display]
+    if display == "off":
+        program = builtin_animation_program("off", device.led_count)
+    upstream = "agent" if program is None else "custom"
     if load_settings().display_for_device(device.id) != upstream:
         change_settings(
             lambda s: s.with_device_display(device.id, upstream, name=device.name, path=device.path))
     if upstream == "custom":
-        program = builtin_animation_program("off", device.led_count)
-        if shown_program(device) != program.strip():
-            write_led_program(program, device_path=device.target)
+        text = normalize_led_text(program).strip()
+        if shown_program(device) != text:
+            write_led_program(text, device_path=device.target)
 
 
 COLOUR = re.compile(r"#([0-9A-Fa-f]{6})")
@@ -1438,13 +1469,60 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
     status = _sysfs(battery / "status")
     charging = status == "Charging"
     full = status == "Full"
+    # Linux has no adapter wattage: while charging, the battery's intake (power_now, microwatts) stands in
+    # for it, which is what upstream's charge speed (the charging program's pulse) reads.
+    adapter_watts = 0
+    if charging and (battery / "power_now").exists():
+        adapter_watts = round(int(_sysfs(battery / "power_now")) / 1_000_000)
     return BatterySnapshot(
         percent=int(_sysfs(battery / "capacity")),
         is_charging=charging,
         is_charged=full,
         is_plugged=plugged or charging or full,
         battery_present=True,
+        adapter_watts=adapter_watts,
     )
+
+
+def read_lid_closed(run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> bool:
+    """logind's LidClosed (D10). An answer it does not recognise raises: it is not guessed."""
+    done = run(list(LID_COMMAND), check=True, capture_output=True, text=True, timeout=2)
+    answer = done.stdout.strip()
+    if answer == "b true":
+        return True
+    if answer == "b false":
+        return False
+    raise ValueError(f"busctl answered {answer!r} for LidClosed")
+
+
+# Copied from upstream status_bar.py (PyObjC, not importable here); tests/test_power.py compares the AST.
+def lid_closed_led_state_should_hold(
+    *,
+    lid_closed: bool | None,
+    sleep_prevention_policy: str,
+    agents_active: bool | None,
+    battery_safeguard_active: bool = False,
+) -> bool:
+    if lid_closed is not True or agents_active is None:
+        return False
+    sleep_prevention_requested = awake_policy_should_hold(
+        sleep_prevention_policy,
+        agents_active=agents_active,
+    ) and not battery_safeguard_active
+    return not sleep_prevention_requested
+
+
+# Copied from upstream status_bar.py; tests/test_power.py compares the AST.
+def lid_close_animation_should_run(
+    *,
+    sleep_prevention_policy: str,
+    agents_active: bool | None,
+) -> bool:
+    if sleep_prevention_policy == SLEEP_PREVENTION_ALWAYS:
+        return False
+    if sleep_prevention_policy == SLEEP_PREVENTION_AGENTS:
+        return agents_active is False
+    return True
 
 
 def agents_awake(controller: Any, mode: Any, now: float) -> tuple[bool, str]:
@@ -1589,6 +1667,20 @@ class Helper:
         self.last_awake: dict[str, Any] | None = None
         self.power_root = POWER_SUPPLY_ROOT
         self.clock: Callable[[], float] = time.monotonic
+        # Laptop (D9, D10). The battery as the last tick read it (None: unreadable) and whether the Battery
+        # Display is offered; the plugged state the 7 s preview compares with, and the preview's end; the lid
+        # as it last read (None: never) and its reader (injectable); the lid animation (program text, end);
+        # the active agents as the last read counted them (None: unknown); the next deadline that changes a device.
+        self.battery: Any = None
+        self.battery_offered = False
+        self.last_plugged: bool | None = None
+        self.preview_until = 0.0
+        self.lid_closed: bool | None = None
+        self.lid_reader: Callable[[], bool] = read_lid_closed
+        self.lid_animation: tuple[str, float] | None = None
+        self.active_count: int | None = None
+        self.next_handover: float | None = None
+        self.last_power: dict[str, Any] | None = None
         # Bar LEDs (D6, D7). The settings and State as the last read saw them; the Bar LEDs' program text
         # (None: nothing to draw); each device's program text as the last device scan read it.
         self.settings: Any = None
@@ -1670,10 +1762,12 @@ class Helper:
 
             self.mode = AgentMode.BLOCKED_ERROR
             self.state_readable = False
+            self.active_count = None
         else:
             self.resolve("state")
             event = state_event(snapshot)
             self.mode = snapshot.aggregate.mode
+            self.active_count = snapshot.aggregate.active_count
             self.state_readable = True
             if self.capabilities["sessions"]["ok"]:
                 statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
@@ -1763,14 +1857,18 @@ class Helper:
             self.device_count = None
         else:
             from sidepulse.device_writer import DeviceWriteError
+            from sidepulse.settings import load_settings
 
             self.device_count = len(self.devices)
             failed = False
             # Nothing is reconciled until the widget has sent its remembered displays.
             pending = self.devices if self.displays is not None else []
+            settings = load_settings()
+            now = self.clock()
             for device in pending:
+                display = display_of(self.displays, device.id, self.battery_offered)
                 try:
-                    apply_display(device, display_of(self.displays, device.id))
+                    apply_display(device, display, self.takeover_text(device, display, settings, now))
                 except (OSError, ValueError, DeviceWriteError) as exc:
                     failed = True
                     self.report("devices", f"{device.name}: {exc}")
@@ -1804,7 +1902,7 @@ class Helper:
                 "product": device.product,
                 "kind": device.kind,
                 "led_count": device.led_count,
-                "display": display_of(self.displays or {}, device.id),
+                "display": display_of(self.displays or {}, device.id, self.battery_offered),
                 "percent": round(settings.brightness_for_device(device.id) * 100 / 255),
                 "colour": shown_colour(device),
             })
@@ -1813,10 +1911,156 @@ class Helper:
     def refresh(self, force: bool = False) -> None:
         self.refresh_state(force)
         self.refresh_awake()
+        self.refresh_power()
         self.refresh_devices(force)
         self.refresh_setup(force)
         self.refresh_hooks(force)
         self.refresh_log(force)
+
+    def tick(self) -> None:
+        """One second's work: the rules re-run, the keep-awake grace, the battery and lid, the devices."""
+        self.ticks += 1
+        self.refresh_state()  # re-run the rules so ages and staleness advance
+        self.refresh_awake()  # the grace runs out with the clock, not with a write
+        self.refresh_power()
+        self.refresh_devices()
+        if self.ticks % SETUP_EVERY_TICKS == 0:
+            self.refresh_setup()
+            self.refresh_hooks()
+            self.refresh_log()
+
+    # --- Laptop (D9, D10): the battery, the 7 s preview and the lid ---
+
+    def agents_active(self) -> bool | None:
+        """Whether an agent is working, as upstream's lid rules read it: None when the State is unknown."""
+        return None if self.active_count is None else self.active_count > 0
+
+    def refresh_power(self) -> None:
+        """Read the battery and the lid once a tick (D10). Emits `power`; a plug or unplug starts the
+        7 s preview (upstream's battery_show_on_power_change); the lid's change starts its animation."""
+        from sidepulse.settings import load_settings
+
+        settings = load_settings()
+        now = self.clock()
+        battery_cap = self.capabilities.get("battery", {}).get("ok") is True
+        battery = self.read_battery_or_none()
+        self.battery = battery
+        self.battery_offered = battery_cap and (battery is None or battery.battery_present)
+        if battery is not None and battery.battery_present:
+            if (battery_cap and self.last_plugged is not None and battery.is_plugged != self.last_plugged
+                    and settings.battery_show_on_power_change):
+                self.preview_until = now + settings.battery_power_change_preview_seconds
+            self.last_plugged = battery.is_plugged
+        if self.capabilities.get("lid", {}).get("ok") is True:
+            self.refresh_lid(settings, now)
+        self.emit_power(battery)
+        due = [t for t in (self.preview_until, self.lid_animation[1] if self.lid_animation else 0.0) if t > now]
+        self.next_handover = min(due) if due else None
+
+    def refresh_lid(self, settings: Any, now: float) -> None:
+        try:
+            closed = self.lid_reader()
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            self.report("lid", f"cannot read the lid state from logind: {exc}")
+            # Unknown, not the last reading: a stale "closed" would keep the devices dark (D14).
+            self.lid_closed = None
+            return
+        self.resolve("lid")
+        if self.lid_closed is not None and closed != self.lid_closed:
+            self.start_lid_animation(closed, settings, now)
+        self.lid_closed = closed
+
+    def start_lid_animation(self, closed: bool, settings: Any, now: float) -> None:
+        """Play the lid's animation (upstream's play_lid_animation). Closing plays only where upstream
+        lets the Mac sleep (lid_close_animation_should_run); opening always plays."""
+        if closed and not lid_close_animation_should_run(
+                sleep_prevention_policy=settings.sleep_prevention_policy, agents_active=self.agents_active()):
+            return
+        from sidepulse.device_writer import DeviceWriteError, normalize_led_text, validate_led_text
+        from sidepulse.settings import LID_ANIMATION_CLOSED, LID_ANIMATION_OPEN
+
+        kind, label = (LID_ANIMATION_CLOSED, "closed") if closed else (LID_ANIMATION_OPEN, "open")
+        animation = settings.lid_animation(kind)
+        text = normalize_led_text(animation.program)
+        try:
+            validate_led_text(text)
+        except DeviceWriteError as exc:
+            # Its own feature: the lid reads clear "lid" every tick, which must not hide this.
+            self.report("lid_animation", f"the {label} lid animation is invalid: {exc}")
+            return
+        self.resolve("lid_animation")
+        self.lid_animation = (text, now + animation.duration_seconds + LID_ANIMATION_FUDGE_SECONDS)
+
+    def lid_led_hold(self, settings: Any) -> bool:
+        """Upstream's lid_closed_led_state_should_hold: a closed lid whose Mac may sleep keeps the LEDs dark."""
+        safeguard, _ = sleep_prevention_battery_safeguard(self.battery, settings.sleep_prevention_min_battery_percent)
+        return lid_closed_led_state_should_hold(
+            lid_closed=self.lid_closed,
+            sleep_prevention_policy=settings.sleep_prevention_policy,
+            agents_active=self.agents_active(),
+            battery_safeguard_active=safeguard,
+        )
+
+    def takeover_text(self, device: Device, display: str, settings: Any, now: float) -> str | None:
+        """The program the helper drives a device with while it takes the LEDs (D9, D10), or None when the
+        service drives it (Agent). Off is always dark. A lid animation wins, then the closed-lid hold, then
+        the Battery display, then the 7 s preview on an Agent device. The battery and lid functions are
+        imported only where their capability put them in use, so a missing one turns off only its feature."""
+        from sidepulse.led_status import builtin_animation_program
+
+        brightness = settings.brightness_for_device(device.id)
+        dark = builtin_animation_program("off", device.led_count)
+        if display == "off":
+            return dark
+        if self.lid_animation is not None and now < self.lid_animation[1]:
+            from sidepulse.led_status import apply_brightness
+
+            return apply_brightness(self.lid_animation[0], brightness)
+        if self.lid_led_hold(settings):
+            return dark
+        battery = self.battery
+        if display == "battery":
+            # An unreadable battery leaves the device dark; PROBLEMS says why (D14: never a stale value).
+            if battery is None:
+                return dark
+            from sidepulse.battery import program_for_battery
+
+            return program_for_battery(battery, led_count=device.led_count, brightness=brightness)
+        if (self.battery_offered and battery is not None and battery.battery_present
+                and now < self.preview_until):
+            from sidepulse.battery import program_for_battery
+
+            return program_for_battery(battery, led_count=device.led_count, brightness=brightness)
+        return None
+
+    def emit_power(self, battery: Any) -> None:
+        event = {
+            "type": "power",
+            "battery_present": None if battery is None else battery.battery_present,
+            "percent": battery.percent if battery is not None and battery.battery_present else None,
+            "plugged": battery.is_plugged if battery is not None else None,
+            "lid_closed": self.lid_closed,
+            "battery_offered": self.battery_offered,
+        }
+        if event != self.last_power:
+            self.last_power = event
+            self.emit(event)
+
+    def release_takeovers(self) -> None:
+        """On exit, hand every device this helper drives back to the service (CODING_STANDARDS: a takeover is
+        released on exit). Off is the user's own choice and stays. Nothing is done before the widget has sent
+        its displays, since the helper does not know what the user chose."""
+        if self.displays is None:
+            return
+        from sidepulse.device_writer import DeviceWriteError
+
+        for device in self.devices:
+            if display_of(self.displays, device.id, self.battery_offered) == "off":
+                continue
+            try:
+                apply_display(device, "agent")
+            except (OSError, ValueError, DeviceWriteError) as exc:
+                sys.stderr.write(f"cannot hand {device.name} back to the service: {exc}\n")
 
     # --- Bar LEDs and device frames (D6, D7, D21) ---
 
@@ -1858,7 +2102,7 @@ class Helper:
         # icon (D12), which is always on show: its device steps even with the popup closed, while it
         # shows Agent. Each device steps once per frame, whoever reads it.
         icon = icon_device(self.devices)
-        if icon is not None and display_of(self.displays or {}, icon.id) != "agent":
+        if icon is not None and display_of(self.displays or {}, icon.id, self.battery_offered) == "off":
             icon = None
         icon_leds: list[list[int]] | None = None
         for device in self.devices:
@@ -2208,6 +2452,7 @@ class Helper:
             self.loop(stdin_fd)
         finally:
             self.close_notifications()
+            self.release_takeovers()
             self.inhibitor.release()
 
     def loop(self, stdin_fd: int) -> None:
@@ -2229,7 +2474,10 @@ class Helper:
                     if self.watch.fd is not None:
                         fds.append(self.watch.fd)
             fds.extend(proc.stdout.fileno() for _, proc, _ in self.notifications)
-            timeout = max(0.0, min(self.next_tick, self.next_frame) - self.clock())
+            deadlines = [self.next_tick, self.next_frame]
+            if self.next_handover is not None:
+                deadlines.append(self.next_handover)
+            timeout = max(0.0, min(deadlines) - self.clock())
             ready, _, _ = select.select(fds, [], [], timeout)
             if stdin_fd in ready:
                 chunk = os.read(stdin_fd, 65536)
@@ -2244,22 +2492,27 @@ class Helper:
             if self.watch is not None and self.watch.fd in ready and "latest.json" in self.watch.names():
                 self.refresh_state()
             now = self.clock()
+            if self.next_handover is not None and now >= self.next_handover:
+                # A battery preview or lid animation ends: its device hands back now, not at the next tick.
+                self.next_handover = None
+                self.refresh_devices()
             if now >= self.next_tick:
                 self.next_tick = now + TICK_SECONDS
-                self.ticks += 1
-                self.refresh_state()  # re-run the rules so ages and staleness advance
-                self.refresh_awake()  # the grace runs out with the clock, not with a write
-                self.refresh_devices()
-                if self.ticks % SETUP_EVERY_TICKS == 0:
-                    self.refresh_setup()
-                    self.refresh_hooks()
-                    self.refresh_log()
+                self.tick()
             if now >= self.next_frame:
                 self.next_frame = now + self.frame_interval
                 self.pump_frames(now)
 
 
+def stop_on_sigterm(signum: int, frame: Any) -> None:
+    """Quickshell stops the helper with SIGTERM: leave through run()'s cleanup, which hands taken devices
+    back and drops the sleep lock. A second SIGTERM during that cleanup is ignored."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    sys.exit(0)
+
+
 def main() -> int:
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
     try:
         Helper(sys.stdout).run(sys.stdin.fileno())
     except BrokenPipeError:

@@ -84,7 +84,8 @@ and brightness. Its LEDs show what its program plays. A Display is one of:
 A SidePulse Pro that unmounts on suspend shows as not connected until it mounts
 again. The popup does not prevent ejection.
 
-**Bar LEDs** (in Settings) draw the State's LEDs along the inner edge of the bar:
+**Bar LEDs** (in Settings) are the Omarchy counterpart of the SidePulse Notch in the
+macOS app. They draw the State's LEDs along the inner edge of the bar:
 2 LEDs for a SidePulse Dot and 8 for a SidePulse Pro. They appear on every monitor
 and on a top, bottom, left or right bar. They need `wasmtime`, see
 [Requirements](#requirements).

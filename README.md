@@ -133,8 +133,8 @@ the popup on the focused monitor has not been checked live.
 KSNI tray icon. Keep only one icon: disable that tray, or hide this widget.
 
 **Herdr and tmux:** optional. They are needed only if your agents run inside one
-of them, so the popup can jump to the pane. Those jumps are covered by unit tests
-and have not been exercised live.
+of them, so the popup can jump to the pane. The herdr jump was checked live; tmux,
+and a herdr pane with no client attached, are covered by unit tests only.
 
 ## Status from scripts
 
@@ -146,9 +146,10 @@ The widget answers Omarchy's IPC target `io.github.mattiasbrandt.sidepulse`
 qs ipc -p /usr/share/omarchy/shell call io.github.mattiasbrandt.sidepulse status
 ```
 
-Its fields are `state` (`Working`, `Ask`, `Done`, `Idle`, or `null` before the
-helper reports), `label` (the tooltip's text; `not installed` or `starting` before
-the helper reports), `urgent` (true in Ask), `active_count`, `top` (the top
+Its fields are `state` (`working`, `ask`, `done` or `idle`; `unavailable` while
+SidePulse's state file cannot be read; `null` before the helper reports), `label`
+(the State's name, such as `Working`; `not installed` or `starting` before the
+helper reports), `urgent` (true in Ask), `active_count`, `top` (the top
 session's name, or `null`) and `needs_setup`. The widget answers from its last
 helper events, so the call works even while the popup is closed.
 

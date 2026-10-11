@@ -104,7 +104,6 @@ Panel {
   readonly property string barLedsDetail: {
     const cap = HelperProcess.capabilities ? HelperProcess.capabilities.bar_leds : undefined
     if (cap && cap.ok === false) return "Unavailable until the problem above is fixed."
-    if (bar && (bar.position === "left" || bar.position === "right")) return "Drawn on a top or bottom bar only."
     return "SidePulse's setting. The LEDs show along the bar's inner edge."
   }
   readonly property real idleSeconds: HelperProcess.settings !== null ? HelperProcess.settings.idle_timeout_seconds : 0
@@ -450,52 +449,61 @@ Panel {
   // Our own shapes (D22): a device outline with its LEDs (D21: one neutral LED
   // with no device, 2 for a SidePulse Dot, 8 for a SidePulse Pro). The setup
   // look is the same glyph at half opacity with a dot in the urgent colour.
+  // The popup's hero draws the glyph across; the bar icon on a left or right bar draws it down (D22, vertical bars).
   readonly property Component glyphComponent: Component {
-    Item {
-      id: glyph
-      opacity: root.needsSetup ? 0.5 : 1.0
-      readonly property real ledSize: Style.space(2)
-      readonly property real ledGap: Style.space(1)
-      readonly property real ledsWidth: root.iconLedCount * ledSize + (root.iconLedCount - 1) * ledGap
+    GlyphShape {}
+  }
+  readonly property Component barGlyphComponent: Component {
+    GlyphShape { vertical: root.bar ? root.bar.vertical === true : false }
+  }
 
-      Rectangle {
-        anchors.centerIn: parent
-        width: Math.max(Style.space(12), glyph.ledsWidth + Style.space(4))
-        height: Style.space(8)
-        radius: height / 2
-        color: "transparent"
-        border.width: Math.max(1, Style.space(1))
-        border.color: root.glyphColour
-      }
+  component GlyphShape: Item {
+    id: glyph
+    property bool vertical: false
+    opacity: root.needsSetup ? 0.5 : 1.0
+    readonly property real ledSize: Style.space(2)
+    readonly property real ledGap: Style.space(1)
+    readonly property real ledsLength: root.iconLedCount * ledSize + (root.iconLedCount - 1) * ledGap
+    readonly property real pillLength: Math.max(Style.space(12), ledsLength + Style.space(4))
 
-      Row {
-        anchors.centerIn: parent
-        spacing: glyph.ledGap
+    Rectangle {
+      anchors.centerIn: parent
+      width: glyph.vertical ? Style.space(8) : glyph.pillLength
+      height: glyph.vertical ? glyph.pillLength : Style.space(8)
+      radius: Math.min(width, height) / 2
+      color: "transparent"
+      border.width: Math.max(1, Style.space(1))
+      border.color: root.glyphColour
+    }
 
-        Repeater {
-          model: root.iconLedCount
+    Grid {
+      anchors.centerIn: parent
+      spacing: glyph.ledGap
+      columns: glyph.vertical ? 1 : root.iconLedCount
 
-          Rectangle {
-            required property int index
-            // The device's live frame (D12), as its popup row draws it; without one, the State's colour.
-            readonly property var led: HelperProcess.iconLeds ? HelperProcess.iconLeds[index] : null
-            width: glyph.ledSize
-            height: width
-            radius: width / 2
-            color: led ? Qt.rgba(led[0] / 255, led[1] / 255, led[2] / 255, 1) : root.glyphColour
-          }
+      Repeater {
+        model: root.iconLedCount
+
+        Rectangle {
+          required property int index
+          // The device's live frame (D12), as its popup row draws it; without one, the State's colour.
+          readonly property var led: HelperProcess.iconLeds ? HelperProcess.iconLeds[index] : null
+          width: glyph.ledSize
+          height: width
+          radius: width / 2
+          color: led ? Qt.rgba(led[0] / 255, led[1] / 255, led[2] / 255, 1) : root.glyphColour
         }
       }
+    }
 
-      Rectangle {
-        visible: root.needsSetup
-        anchors.right: parent.right
-        anchors.top: parent.top
-        width: Style.space(3)
-        height: width
-        radius: width / 2
-        color: root.urgent
-      }
+    Rectangle {
+      visible: root.needsSetup
+      anchors.right: parent.right
+      anchors.top: parent.top
+      width: Style.space(3)
+      height: width
+      radius: width / 2
+      color: root.urgent
     }
   }
 
@@ -506,7 +514,7 @@ Panel {
     tooltipText: root.tooltipText
     // Ask lights the icon with the urgent highlight (D12).
     active: root.agentState !== null && root.agentState.urgent === true
-    iconComponent: root.glyphComponent
+    iconComponent: root.barGlyphComponent
 
     onPressed: function (buttonCode) {
       if (buttonCode === Qt.LeftButton) root.toggle()

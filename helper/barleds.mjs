@@ -78,6 +78,45 @@ export function bandColumns(colours, bandWidth) {
   return columns;
 }
 
+// Where the band sits in its bar window, and how its canvas is turned (D7). A top or bottom bar's band is
+// LED_BAND_HEIGHT tall across the window, centred, on the inner edge. A left or right bar's band is
+// LED_BAND_HEIGHT wide down the inner edge (the right of a left bar, the left of a right bar), centred.
+// For a vertical bar the band is painted in its horizontal frame and turned by a quarter turn, so the
+// LEDs run top to bottom: the canvas is translated to originX/originY and rotated by `rotation`. The
+// hotline (the edge facing the desktop) is the band's outer edge: the bottom of a top bar, the top of a
+// bottom bar, the right of a left bar and the left of a right bar.
+export function bandLayout(edge, windowWidth, windowHeight) {
+  const vertical = edge === "left" || edge === "right"
+  const length = Math.min(WINDOW_WIDTH, vertical ? windowHeight : windowWidth)
+  const outerEdgeIsBottom = edge === "top" || edge === "right"
+  if (vertical) {
+    return {
+      vertical,
+      x: edge === "left" ? windowWidth - LED_BAND_HEIGHT : 0,
+      y: Math.round((windowHeight - length) / 2),
+      width: LED_BAND_HEIGHT,
+      height: length,
+      length,
+      outerEdgeIsBottom,
+      originX: LED_BAND_HEIGHT,
+      originY: 0,
+      rotation: Math.PI / 2,
+    }
+  }
+  return {
+    vertical,
+    x: Math.round((windowWidth - length) / 2),
+    y: edge === "top" ? windowHeight - LED_BAND_HEIGHT : 0,
+    width: length,
+    height: LED_BAND_HEIGHT,
+    length,
+    outerEdgeIsBottom,
+    originX: 0,
+    originY: 0,
+    rotation: 0,
+  }
+}
+
 // Paint the band into a 2D canvas that is bandWidth by LED_BAND_HEIGHT and sits
 // on the bar's inner edge. The hotline is the band's outer edge, 1.15 px, as
 // upstream draws it: the bottom edge when the outer edge is the bottom (a top bar).

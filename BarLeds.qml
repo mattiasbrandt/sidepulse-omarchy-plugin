@@ -11,8 +11,9 @@ import "helper/barleds.mjs" as Band
 // window's own background colour), so marks the bar draws on the same edge, such
 // as the open-popup line, stay on top of it. Every widget copy
 // asks for its window's band, and the first copy per window holds it
-// (HelperProcess). The position comes from the window, so which copy holds it
-// does not show.
+// (HelperProcess). The position comes from the window, so which copy
+// holds it does not show. A top or bottom bar's band runs across the bar; a
+// left or right bar's runs down it (Band.bandLayout).
 Item {
   id: band
 
@@ -21,19 +22,18 @@ Item {
   property var barWindow: null
 
   readonly property string edge: bar ? String(bar.position) : "top"
-  readonly property bool horizontal: edge === "top" || edge === "bottom"
   readonly property var leds: HelperProcess.barLeds
-  readonly property bool wants: horizontal && barWindow !== null && leds !== null
+  readonly property bool wants: barWindow !== null && leds !== null
   readonly property bool holds: wants && HelperProcess.bandHolder(barWindow) === band
+  readonly property var layout: Band.bandLayout(edge, parent ? parent.width : 0, parent ? parent.height : 0)
 
   parent: barWindow ? barWindow.contentItem : null
   z: -1
   visible: holds
-  width: parent ? Math.min(Band.WINDOW_WIDTH, parent.width) : 0
-  height: Band.LED_BAND_HEIGHT
-  x: parent ? Math.round((parent.width - width) / 2) : 0
-  // The inner edge: the bottom of a top bar, the top of a bottom bar.
-  y: parent ? (edge === "top" ? parent.height - height : 0) : 0
+  width: layout.width
+  height: layout.height
+  x: layout.x
+  y: layout.y
 
   function reclaim() { HelperProcess.wantBand(band, barWindow, wants) }
 
@@ -41,6 +41,7 @@ Item {
   onBarWindowChanged: reclaim()
   onHoldsChanged: if (holds) canvas.requestPaint()
   onLedsChanged: if (holds) canvas.requestPaint()
+  onLayoutChanged: if (holds) canvas.requestPaint()
   Component.onDestruction: HelperProcess.wantBand(band, null, false)
 
   Canvas {
@@ -48,7 +49,12 @@ Item {
     anchors.fill: parent
     onPaint: {
       const context = getContext("2d")
-      Band.paintBand(context, Band.ledColours(band.leds || []), width, band.edge === "top")
+      // The band is painted in its horizontal frame; a vertical bar's canvas is turned to run along it.
+      context.save()
+      context.translate(band.layout.originX, band.layout.originY)
+      context.rotate(band.layout.rotation)
+      Band.paintBand(context, Band.ledColours(band.leds || []), band.layout.length, band.layout.outerEdgeIsBottom)
+      context.restore()
     }
   }
 }

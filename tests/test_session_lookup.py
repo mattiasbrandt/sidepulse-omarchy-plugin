@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,37 @@ from sidepulse_omarchy import Proc, resolve
 
 SESSION = "019a0000-aaaa-7bbb-8ccc-000000000001"
 CWD = "/work/project"
+
+
+class FakeRun:
+    """Stands in for run_command: answers the commands a test lists and fails any other."""
+
+    def __init__(self, answers: dict[str, tuple[int, str, str]]) -> None:
+        self.answers = answers
+        self.asked: list[str] = []
+
+    def __call__(self, argv: list[str]) -> subprocess.CompletedProcess:
+        line = " ".join(argv)
+        self.asked.append(line)
+        code, out, err = self.answers.get(line, (127, "", f"not expected in this test: {line}"))
+        return subprocess.CompletedProcess(argv, code, out, err)
+
+
+def ok(stdout: str) -> tuple[int, str, str]:
+    return (0, stdout, "")
+
+
+def fail(stderr: str) -> tuple[int, str, str]:
+    return (1, "", stderr)
+
+
+def herdr_pane(pane_id: str) -> dict:
+    return {"pane_id": pane_id}
+
+
+def herdr_process_info(*pids: int) -> str:
+    return json.dumps({"id": "x", "result": {"process_info": {"foreground_processes": [
+        {"pid": pid, "name": "x", "argv": [], "cmdline": "", "cwd": "/"} for pid in pids]}}})
 
 
 class FakeSystem:
@@ -46,9 +78,10 @@ class FakeSystem:
         (sessions / f"{pid}.json").write_text(json.dumps(
             {"pid": pid, "sessionId": session_id, "procStart": str(proc_start)}))
 
-    def resolve(self, provider: str, cwd: str | None = CWD, clients: list[dict] | None = None) -> dict:
+    def resolve(self, provider: str, cwd: str | None = CWD, clients: list[dict] | None = None,
+                answers: dict[str, tuple[int, str, str]] | None = None) -> dict:
         return resolve(provider, SESSION, cwd, proc=Proc(self.proc_root), home=self.home,
-                       clients=clients or [])
+                       clients=clients or [], run=FakeRun(answers or {}))
 
 
 class LookupStates(unittest.TestCase):
@@ -123,8 +156,9 @@ class LookupStates(unittest.TestCase):
         self.sys.process(301, "claude", cwd=CWD, args=["claude"], ppid=300, starttime=42)
         self.sys.claude_session_file(301, SESSION, 42)
         result = self.sys.resolve("claude")
-        self.assertEqual((result["state"], result["action"]), ("live", "no-window"))
+        self.assertEqual((result["state"], result["action"]), ("live", "explain"))
         self.assertEqual(result["ancestry"], [301, 300])
+        self.assertEqual(result["where"], "herdr (pid 300)")
 
     def test_live_process_focuses_its_terminal_window(self) -> None:
         self.sys.process(400, "ghostty", cwd="/", args=["ghostty"])
@@ -133,6 +167,82 @@ class LookupStates(unittest.TestCase):
         clients = [{"pid": 400, "address": "0xabc", "title": "anything"}]
         result = self.sys.resolve("claude", clients=clients)
         self.assertEqual((result["action"], result["address"]), ("focus", "0xabc"))
+
+    def test_herdr_pane_holding_the_session_is_focused_by_pane(self) -> None:
+        self.sys.process(300, "herdr", cwd="/", args=["/usr/bin/herdr", "server"], ppid=1)
+        self.sys.process(301, "zsh", cwd=CWD, args=["zsh"], ppid=300)
+        self.sys.process(302, "claude", cwd=CWD, args=["claude"], ppid=301, starttime=42)
+        self.sys.claude_session_file(302, SESSION, 42)
+        answers = {
+            "herdr pane list": ok(json.dumps({"result": {"panes": [herdr_pane("w1:p1"), herdr_pane("w2:p1")]}})),
+            "herdr pane process-info --pane w1:p1": ok(herdr_process_info(999)),
+            "herdr pane process-info --pane w2:p1": ok(herdr_process_info(302)),
+        }
+        result = self.sys.resolve("claude", answers=answers)
+        self.assertEqual((result["action"], result["pane"]), ("herdr", "w2:p1"))
+        self.assertIsNone(result["client"])  # no herdr client runs: attach one
+
+    def test_herdr_client_window_is_focused_with_the_pane(self) -> None:
+        self.sys.process(300, "herdr", cwd="/", args=["/usr/bin/herdr", "server"], ppid=1)
+        self.sys.process(302, "claude", cwd=CWD, args=["claude"], ppid=300, starttime=42)
+        self.sys.claude_session_file(302, SESSION, 42)
+        self.sys.process(400, "herdr", cwd="/", args=["herdr"], ppid=410)
+        self.sys.process(410, "zsh", cwd="/", args=["zsh"], ppid=420)
+        self.sys.process(420, "ghostty", cwd="/", args=["ghostty"], ppid=1)
+        answers = {
+            "herdr pane list": ok(json.dumps({"result": {"panes": [herdr_pane("w2:p1")]}})),
+            "herdr pane process-info --pane w2:p1": ok(herdr_process_info(302)),
+        }
+        clients = [{"pid": 420, "address": "0xdef", "title": "herdr"}]
+        result = self.sys.resolve("claude", clients=clients, answers=answers)
+        self.assertEqual(result["action"], "herdr")
+        self.assertEqual(result["client"], {"action": "focus", "address": "0xdef", "title": "herdr"})
+
+    def test_herdr_failure_is_reported_not_hidden(self) -> None:
+        self.sys.process(301, "claude", cwd=CWD, args=["claude"], starttime=42)
+        self.sys.claude_session_file(301, SESSION, 42)
+        answers = {"herdr pane list": fail("herdr server is not running")}
+        result = self.sys.resolve("claude", answers=answers)
+        self.assertEqual(result["action"], "explain")
+        self.assertIn("herdr: herdr server is not running", result["notes"])
+
+    def test_tmux_pane_holding_the_session_is_focused_by_pane(self) -> None:
+        self.sys.process(300, "tmux: server", cwd="/", args=["tmux: server"], ppid=1)
+        self.sys.process(301, "zsh", cwd=CWD, args=["zsh"], ppid=300)
+        self.sys.process(302, "claude", cwd=CWD, args=["claude"], ppid=301, starttime=42)
+        self.sys.claude_session_file(302, SESSION, 42)
+        answers = {
+            "herdr pane list": fail("herdr is not installed"),
+            "tmux list-panes -a -F #{pane_pid} #{pane_id} #{session_name}":
+                ok("999 %1 other\n301 %3 work\n"),
+            "tmux list-clients -F #{client_pid}": ok(""),
+        }
+        result = self.sys.resolve("claude", answers=answers)
+        self.assertEqual((result["action"], result["pane"], result["session"]), ("tmux", "%3", "work"))
+        self.assertIsNone(result["client"])
+
+    def test_tmux_without_server_is_not_an_error(self) -> None:
+        self.sys.process(301, "claude", cwd=CWD, args=["claude"], starttime=42)
+        self.sys.claude_session_file(301, SESSION, 42)
+        answers = {
+            "herdr pane list": fail("herdr server is not running"),
+            "tmux list-panes -a -F #{pane_pid} #{pane_id} #{session_name}":
+                fail("no server running on /tmp/tmux-1000/default"),
+        }
+        result = self.sys.resolve("claude", answers=answers)
+        self.assertEqual(result["action"], "explain")
+        self.assertEqual(result["notes"], ["herdr: herdr server is not running"])
+
+    def test_two_herdr_panes_holding_the_session_are_ambiguous(self) -> None:
+        self.sys.process(302, "claude", cwd=CWD, args=["claude"], starttime=42)
+        self.sys.claude_session_file(302, SESSION, 42)
+        answers = {
+            "herdr pane list": ok(json.dumps({"result": {"panes": [herdr_pane("w1:p1"), herdr_pane("w2:p1")]}})),
+            "herdr pane process-info --pane w1:p1": ok(herdr_process_info(302)),
+            "herdr pane process-info --pane w2:p1": ok(herdr_process_info(302)),
+        }
+        result = self.sys.resolve("claude", answers=answers)
+        self.assertEqual((result["action"], result["candidates"]), ("ambiguous-pane", ["w1:p1", "w2:p1"]))
 
 
 if __name__ == "__main__":

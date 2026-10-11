@@ -618,9 +618,116 @@ def find_window(provider: str, session_id: str, cwd: str | None, pid: int, proc:
     return {"action": "no-window", "ancestry": chain}
 
 
+Run = Callable[[list[str]], subprocess.CompletedProcess]
+
+
+def herdr_panes_holding(chain: list[int], run: Run) -> list[str]:
+    """The herdr panes whose foreground processes include the session's process or an ancestor."""
+    panes = _json_output(run(["herdr", "pane", "list"]))["result"]["panes"]
+    holding = []
+    for pane in panes:
+        info = _json_output(run(["herdr", "pane", "process-info", "--pane", pane["pane_id"]]))
+        pids = {entry["pid"] for entry in info["result"]["process_info"]["foreground_processes"]}
+        if pids.intersection(chain):
+            holding.append(pane["pane_id"])
+    return holding
+
+
+def herdr_client_pids(proc: Proc) -> list[int]:
+    """Attached herdr clients: a herdr with a terminal that is not the server."""
+    return [pid for pid in proc.pids_of("herdr")
+            if proc.has_terminal(pid) and "server" not in proc.cmdline(pid)[1:]]
+
+
+def tmux_panes_holding(chain: list[int], run: Run) -> list[tuple[str, str]]:
+    """(pane id, session name) of the tmux panes whose shell is the session's process or an ancestor."""
+    done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_name}"])
+    if done.returncode != 0:
+        if "no server running" in done.stderr:
+            return []
+        raise CommandFailed(f"tmux list-panes: {(done.stderr or done.stdout).strip()}")
+    holding = []
+    for line in done.stdout.splitlines():
+        pane_pid, pane_id, session = line.split(" ", 2)
+        if int(pane_pid) in chain:
+            holding.append((pane_id, session))
+    return holding
+
+
+def tmux_client_pids(run: Run) -> list[int]:
+    done = run(["tmux", "list-clients", "-F", "#{client_pid}"])
+    if done.returncode != 0:
+        raise CommandFailed(f"tmux list-clients: {(done.stderr or done.stdout).strip()}")
+    return [int(line) for line in done.stdout.split()]
+
+
+def _json_output(done: subprocess.CompletedProcess) -> Any:
+    if done.returncode != 0:
+        raise CommandFailed((done.stderr or done.stdout).strip() or f"exit {done.returncode}")
+    return json.loads(done.stdout)
+
+
+def client_window(pids: list[int], proc: Proc, home: Path, clients: list[dict]) -> dict | None:
+    """Where a multiplexer's client runs. None when no client is attached (open one, D8)."""
+    if not pids:
+        return None
+    windows = [find_window("multiplexer", "", None, pid, proc, home, clients) for pid in pids]
+    focus = [window for window in windows if window["action"] == "focus"]
+    if len(focus) == 1:
+        return focus[0]
+    if len(pids) == 1:
+        return windows[0]
+    return {"action": "ambiguous-window", "candidates": len(pids)}
+
+
+def running_in(chain: list[int], proc: Proc) -> str:
+    """The nearest ancestor that is not a shell: where an agent with no window runs."""
+    for ancestor in chain[1:]:
+        name = proc.comm(ancestor)
+        if name and name not in SHELLS:
+            return f"{name} (pid {ancestor})"
+    nearest = chain[1] if len(chain) > 1 else chain[0]
+    return f"{proc.comm(nearest) or 'an unknown parent'} (pid {nearest})"
+
+
+def live_route(provider: str, session_id: str, cwd: str | None, pid: int, proc: Proc, home: Path,
+               clients: list[dict], run: Run) -> dict:
+    """Where a live session runs (D8): its window, else its herdr pane, else its tmux pane, else nowhere known.
+
+    Each multiplexer that cannot be asked is reported in `notes` and the lookup goes on; the
+    result is never a guess.
+    """
+    window = find_window(provider, session_id, cwd, pid, proc, home, clients)
+    if window["action"] != "no-window":
+        return window
+    chain = window["ancestry"]
+    notes: list[str] = []
+    try:
+        panes = herdr_panes_holding(chain, run)
+    except CommandFailed as exc:
+        panes = []
+        notes.append(f"herdr: {exc}")
+    if len(panes) > 1:
+        return {"action": "ambiguous-pane", "multiplexer": "herdr", "candidates": panes, "ancestry": chain}
+    if panes:
+        return {"action": "herdr", "pane": panes[0],
+                "client": client_window(herdr_client_pids(proc), proc, home, clients)}
+    try:
+        tmux = tmux_panes_holding(chain, run)
+        if len(tmux) > 1:
+            return {"action": "ambiguous-pane", "multiplexer": "tmux", "candidates": [p for p, _ in tmux],
+                    "ancestry": chain}
+        if tmux:
+            pane, session = tmux[0]
+            return {"action": "tmux", "pane": pane, "session": session,
+                    "client": client_window(tmux_client_pids(run), proc, home, clients)}
+    except CommandFailed as exc:
+        notes.append(f"tmux: {exc}")
+    return {"action": "explain", "where": running_in(chain, proc), "ancestry": chain, "notes": notes}
+
+
 def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None = None,
-            home: Path | None = None, clients: list[dict] | None = None,
-            run: Callable[[list[str]], subprocess.CompletedProcess] = run_command) -> dict:
+            home: Path | None = None, clients: list[dict] | None = None, run: Run = run_command) -> dict:
     proc = proc or Proc()
     home = home or Path.home()
     found = find_process(provider, session_id, cwd, proc, home)
@@ -628,9 +735,12 @@ def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None =
         return {**found, "action": "resume"}
     if found["state"] == "unresolved":
         return {**found, "action": "explain"}
-    window = find_window(provider, session_id, cwd, found["pid"], proc, home,
-                         hypr_clients(run) if clients is None else clients)
-    return {**found, **window}
+    try:
+        window_clients = hypr_clients(run) if clients is None else clients
+    except CommandFailed as exc:
+        return {**found, "action": "explain", "where": running_in(proc.chain(found["pid"]), proc),
+                "notes": [str(exc)]}
+    return {**found, **live_route(provider, session_id, cwd, found["pid"], proc, home, window_clients, run)}
 
 
 class Helper:

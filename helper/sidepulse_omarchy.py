@@ -53,6 +53,7 @@ import os
 import re
 import select
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -2495,7 +2496,15 @@ class Helper:
                 self.pump_frames(now)
 
 
+def stop_on_sigterm(signum: int, frame: Any) -> None:
+    """Quickshell stops the helper with SIGTERM: leave through run()'s cleanup, which hands taken devices
+    back and drops the sleep lock. A second SIGTERM during that cleanup is ignored."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    sys.exit(0)
+
+
 def main() -> int:
+    signal.signal(signal.SIGTERM, stop_on_sigterm)
     try:
         Helper(sys.stdout).run(sys.stdin.fileno())
     except BrokenPipeError:

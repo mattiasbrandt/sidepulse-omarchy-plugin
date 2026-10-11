@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
+import Quickshell
 import qs.Commons
 import qs.Ui
 import "helper"
@@ -11,11 +12,15 @@ import "helper/settings.mjs" as Settings
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
 // popup holds Setup (D19), Sessions, Devices and the collapsible Settings
-// section (D13), which also holds Keep awake (D11, D18).
+// section (D13), which also holds Keep awake (D11, D18). The Bar LEDs (D7)
+// are drawn in the bar window by BarLeds.
 Panel {
   id: root
 
   moduleName: "io.github.mattiasbrandt.sidepulse"
+
+  // The bar window this copy sits in: the Bar LEDs are drawn into it (D7).
+  readonly property var barWindow: QsWindow.window
 
   readonly property string pythonSetting: setting("sidepulsePython", "")
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -100,7 +105,8 @@ Panel {
   readonly property string barLedsDetail: {
     const cap = HelperProcess.capabilities ? HelperProcess.capabilities.bar_leds : undefined
     if (cap && cap.ok === false) return "Unavailable until the problem above is fixed."
-    return "SidePulse's setting. Drawing the LEDs on the bar is not in this version."
+    if (bar && (bar.position === "left" || bar.position === "right")) return "Drawn on a top or bottom bar only."
+    return "SidePulse's setting. The LEDs show along the bar's inner edge."
   }
   readonly property real idleSeconds: HelperProcess.settings !== null ? HelperProcess.settings.idle_timeout_seconds : 0
   readonly property real retentionSeconds: HelperProcess.settings !== null
@@ -468,6 +474,12 @@ Panel {
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
+
+  // The Bar LEDs (D7): this copy asks for the band of its bar window; the first copy per window holds it.
+  BarLeds {
+    bar: root.bar
+    barWindow: root.barWindow
+  }
 
   KeyboardPanel {
     id: panel
@@ -911,11 +923,11 @@ Panel {
 
     readonly property string rowName: "device:" + device.id
     readonly property string display: root.displayOf(device.id)
-    // The colour the device's own LEDs show now (the animation frames come with
-    // the Bar LEDs, #8); Off and dark programs leave them dim.
-    readonly property color ledColour: display === "agent" && device.colour
-      ? device.colour
-      : root.dim
+    // The device's LEDs as its program plays them now (the helper's frames, D21). Without frames
+    // (the Bar LEDs' engine is unavailable, PROBLEMS says why) they show the program's colour, as
+    // before the frames; Off shows dim.
+    readonly property var leds: display === "agent" ? (HelperProcess.deviceLeds[device.id] || null) : null
+    readonly property color staticColour: display === "agent" && device.colour ? device.colour : root.dim
 
     hasCursor: root.rowHasCursor(rowName)
     foreground: root.foreground
@@ -942,7 +954,8 @@ Panel {
         ProductArt {
           anchors.verticalCenter: parent.verticalCenter
           count: deviceRow.device.led_count
-          colour: deviceRow.ledColour
+          colours: deviceRow.leds
+          colour: deviceRow.staticColour
         }
 
         Column {
@@ -1016,9 +1029,18 @@ Panel {
   component ProductArt: Item {
     id: art
     property int count: 2
+    // Each LED's [red, green, blue], 0-255, as the helper's frame gives it; null when there are none.
+    property var colours: null
+    // The colour drawn when there are no frames: the device program's first colour (#5), or dim.
     property color colour: root.dim
     readonly property real ledSize: Style.space(4)
     readonly property real ledGap: Style.space(3)
+
+    // Read by each LED's delegate: a new frame changes the colours in place, the delegates stay.
+    function ledColour(index) {
+      const led = art.colours ? art.colours[index] : null
+      return led ? Qt.rgba(led[0] / 255, led[1] / 255, led[2] / 255, 1) : art.colour
+    }
 
     width: Math.max(Style.space(24), count * ledSize + (count - 1) * ledGap + Style.space(10))
     height: Style.space(12)
@@ -1043,7 +1065,7 @@ Panel {
           width: art.ledSize
           height: width
           radius: width / 2
-          color: art.colour
+          color: art.ledColour(index)
         }
       }
     }

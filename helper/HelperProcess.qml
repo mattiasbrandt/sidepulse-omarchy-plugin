@@ -44,6 +44,12 @@ Item {
   property var settings: null
   // The keep-awake policy, whether the sleep lock is held and why (D11); null until the helper reports.
   property var awake: null
+  // The Bar LEDs' colours, [r, g, b] per LED, or null when nothing is drawn (D6, D7), and each
+  // device's colours by device id (the popup's device rows). Replaced on each frame that changed.
+  property var barLeds: null
+  property var deviceLeds: ({})
+  // The Bar LEDs' copies that want the band, in the order they asked: the first per bar window holds it.
+  property var bandClaims: []
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -87,6 +93,8 @@ Item {
     hookLog = []
     settings = null
     awake = null
+    barLeds = null
+    deviceLeds = ({})
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -111,6 +119,31 @@ Item {
   function setNotify(enabled) { send({ cmd: "set-notify", enabled: enabled }) }
   // Keep awake (D11): never, agents (when agents work) or always; saved through upstream's settings.
   function setPolicy(policy) { send({ cmd: "set-policy", policy: policy }) }
+
+  // A Bar LEDs copy asks for the band of its bar window (`wants`), or drops its ask (`wants` false,
+  // on destruction). The first copy that asked for a window holds it; when it leaves, the next holds it.
+  function wantBand(owner, window, wants) {
+    const others = bandClaims.filter(function (claim) { return claim.owner !== owner })
+    bandClaims = wants && window ? others.concat([{ owner: owner, window: window }]) : others
+  }
+
+  // The copy holding the band of this window, or null.
+  function bandHolder(window) {
+    for (let i = 0; i < bandClaims.length; i++) {
+      if (bandClaims[i].window === window) return bandClaims[i].owner
+    }
+    return null
+  }
+
+  function applyFrame(event) {
+    if (event.target === "bar") {
+      barLeds = event.leds
+    } else if (event.target === "device") {
+      const next = Object.assign({}, deviceLeds)
+      next[event.device] = event.leds
+      deviceLeds = next
+    }
+  }
 
   function handleLine(line) {
     if (line.trim() === "") return
@@ -141,6 +174,8 @@ Item {
       settings = event
     } else if (event.type === "awake") {
       awake = event
+    } else if (event.type === "frame") {
+      applyFrame(event)
     } else if (event.type === "result") {
       lastResult = event
     } else if (event.type === "error") {

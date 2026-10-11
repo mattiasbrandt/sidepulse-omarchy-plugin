@@ -87,6 +87,7 @@ const PROBLEM_TITLES = {
   service: "Service",
   devices: "Devices",
   bar_leds: "Bar LEDs",
+  frames: "LED programs",
   hooks: "Hooks",
   hook_log: "Hook log",
   settings: "Settings",

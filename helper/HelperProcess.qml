@@ -48,6 +48,8 @@ Item {
   // The Bar LEDs' colours, [r, g, b] per LED, or null when nothing is drawn (D6, D7), and each
   // device's colours by device id (the popup's device rows). Replaced on each frame that changed.
   property var barLeds: null
+  // The bar icon's LEDs: its device's frames while that device shows Agent (D12), else null.
+  property var iconLeds: null
   property var deviceLeds: ({})
   // The Bar LEDs' copies that want the band, in the order they asked: the first per bar window holds it.
   property var bandClaims: []
@@ -100,6 +102,7 @@ Item {
     settings = null
     awake = null
     barLeds = null
+    iconLeds = null
     deviceLeds = ({})
     popupSent = null  // the next helper is told again
     errors = {}  // the next helper re-reports what still fails
@@ -158,6 +161,8 @@ Item {
   function applyFrame(event) {
     if (event.target === "bar") {
       barLeds = event.leds
+    } else if (event.target === "icon") {
+      iconLeds = event.leds
     } else if (event.target === "device") {
       const next = Object.assign({}, deviceLeds)
       next[event.device] = event.leds

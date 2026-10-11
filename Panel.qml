@@ -445,10 +445,12 @@ Panel {
 
           Rectangle {
             required property int index
+            // The device's live frame (D12), as its popup row draws it; without one, the State's colour.
+            readonly property var led: HelperProcess.iconLeds ? HelperProcess.iconLeds[index] : null
             width: glyph.ledSize
             height: width
             radius: width / 2
-            color: root.glyphColour
+            color: led ? Qt.rgba(led[0] / 255, led[1] / 255, led[2] / 255, 1) : root.glyphColour
           }
         }
       }

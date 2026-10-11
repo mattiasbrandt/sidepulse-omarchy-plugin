@@ -43,9 +43,15 @@ test("hook rows name the agent as GLOSSARY writes it, and say what the config ho
   assert.equal(Settings.hookName("claude"), "Claude Code")
   assert.equal(Settings.hookName("codex"), "Codex")
   assert.equal(Settings.hookName("junie"), "Junie")
-  assert.equal(Settings.hookStatus({ exists: true, hooks_enabled: true }), "On")
-  assert.equal(Settings.hookStatus({ exists: true, hooks_enabled: false }), "Off")
-  assert.equal(Settings.hookStatus({ exists: false, hooks_enabled: false }), "No config yet")
+  // "On" means SidePulse's own hooks are installed, not any hook (installed comes from the helper).
+  assert.equal(Settings.hookStatus({ exists: true, hooks_enabled: true, installed: true }), "On")
+  assert.equal(Settings.hookStatus({ exists: true, hooks_enabled: false, installed: false }), "Off")
+  assert.equal(Settings.hookStatus({ exists: false, hooks_enabled: false, installed: false }), "No config yet")
+  // Another tool's hook on a known event is not SidePulse's: say so, do not claim it is on.
+  assert.equal(
+    Settings.hookStatus({ exists: true, hooks_enabled: true, installed: false, hook_events: ["Stop"] }),
+    "Other hooks only")
+  assert.equal(Settings.hookStatus({ provider: "claude", error: "AttributeError: x" }), "Unreadable")
   assert.equal(Settings.hookStatus(undefined), "Checking")
 })
 

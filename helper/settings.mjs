@@ -42,11 +42,14 @@ export function hookName(provider) {
   return HOOK_NAMES[provider] || provider
 }
 
-// What an agent's hook config holds, from the helper's `hooks` entry (doctor's fields).
+// What an agent's SidePulse hooks are, from the helper's `hooks` entry. "On" means
+// SidePulse's own hooks are installed (the helper's `installed`), not any hook.
 export function hookStatus(entry) {
   if (!entry) return "Checking"
+  if (entry.error) return "Unreadable"
   if (!entry.exists) return "No config yet"
-  return entry.hooks_enabled ? "On" : "Off"
+  if (entry.installed) return "On"
+  return entry.hook_events && entry.hook_events.length > 0 ? "Other hooks only" : "Off"
 }
 
 // The title of a problem line, by the feature the helper reported it for.

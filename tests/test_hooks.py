@@ -182,3 +182,19 @@ def test_the_helper_reports_a_hooks_problem_and_keeps_running(home):
     assert provider(events[-1], "codex")["exists"] is False
     h.handle_line(b'{"cmd": "refresh"}')  # the helper still answers commands
 
+
+def test_someone_elses_hook_on_a_known_event_is_not_sidepulse_installed(home):
+    # Upstream's hooks_enabled is true for any hook on a known event; installed means SidePulse's own.
+    config = home / "home" / ".claude" / "settings.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo done"}]}]}}))
+    claude = provider(helper.hooks_event(), "claude")
+    assert claude["hooks_enabled"] is True
+    assert claude["installed"] is False
+
+
+def test_sidepulses_own_hooks_are_installed(home):
+    ok, message = helper.run_hook_command("install", "claude", helper.sys.executable)
+    assert ok, message
+    claude = provider(helper.hooks_event(), "claude")
+    assert claude["installed"] is True

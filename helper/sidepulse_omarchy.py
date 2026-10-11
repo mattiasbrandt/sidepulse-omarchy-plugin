@@ -421,6 +421,7 @@ def hooks_event(home: Path | None = None) -> dict[str, Any]:
             rows.append({"provider": name, "error": f"{type(exc).__name__}: {exc}"})
             continue
         row = config.to_dict()
+        row["installed"] = bool(config.log_paths)
         rows.append(row)
     return {"type": "hooks", "providers": rows}
 

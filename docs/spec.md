@@ -281,7 +281,10 @@ _Filled in during grilling, one entry per answered question._
   switch per agent (`hooks` event: upstream's `detect_provider_configs`, the
   payload `agent-monitor doctor --json` prints; the switch runs the
   `agent-monitor install|uninstall <agent>` CLI, the only writer of agent
-  configs), Bar LEDs (`virtual_status_device_enabled` through
+  configs; "on" means SidePulse's own hooks are installed: the helper's
+  `installed` is upstream's log paths, which only SidePulse's hooks carry. An
+  unrelated hook on a known event shows "Other hooks only" and is not counted),
+  Bar LEDs (`virtual_status_device_enabled` through
   `with_virtual_status_device`; the helper does not register upstream's Notch
   device the way the Mac app does, since that would list it in `devices[]`),
   idle timeout and session retention (`with_agent_list_timing`; refused when

@@ -117,7 +117,8 @@ Panel {
     if (hookBusy !== "") return
     const entry = hookEntry(provider)
     hookBusy = provider
-    if (entry && entry.hooks_enabled) HelperProcess.uninstallHooks(provider)
+    // "Installed" is SidePulse's own hooks, so a switch on means remove them, and off means install.
+    if (entry && entry.installed === true) HelperProcess.uninstallHooks(provider)
     else HelperProcess.installHooks(provider)
   }
 
@@ -617,7 +618,7 @@ Panel {
                   settingLabel: Settings.hookName(modelData)
                   settingDetail: Settings.hookStatus(root.hookEntry(modelData))
                   showSwitch: true
-                  checked: root.hookEntry(modelData) !== undefined && root.hookEntry(modelData).hooks_enabled === true
+                  checked: root.hookEntry(modelData) !== undefined && root.hookEntry(modelData).installed === true
                   busy: root.hookBusy === modelData
                 }
               }

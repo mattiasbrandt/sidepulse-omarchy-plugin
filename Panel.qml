@@ -670,6 +670,7 @@ Panel {
               SettingRow {
                 width: parent.width
                 rowName: "idle"
+                stepper: true
                 settingLabel: "Idle timeout"
                 settingDetail: "A session with no hook for this long goes stale."
                 settingValue: HelperProcess.settings !== null ? Settings.durationLabel(root.idleSeconds) : ""
@@ -678,6 +679,7 @@ Panel {
               SettingRow {
                 width: parent.width
                 rowName: "retention"
+                stepper: true
                 settingLabel: "Keep finished sessions"
                 settingDetail: "Done sessions stay in the list for this long."
                 settingValue: HelperProcess.settings !== null ? Settings.durationLabel(root.retentionSeconds) : ""
@@ -1076,6 +1078,9 @@ Panel {
     property bool showSwitch: false
     property bool checked: false
     property bool busy: false
+    // A timeout row: ‹ value › chevrons and the wheel step it both ways (Omarchy's
+    // clock panel steps its month the same way); a click on the row does nothing.
+    property bool stepper: false
 
     hasCursor: root.rowHasCursor(rowName)
     foreground: root.foreground
@@ -1086,7 +1091,16 @@ Panel {
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
       onEntered: root.focusRow(settingRow.rowName)
-      onClicked: root.activateRow(settingRow.rowName)
+      onClicked: if (!settingRow.stepper) root.activateRow(settingRow.rowName)
+    }
+
+    WheelHandler {
+      enabled: settingRow.stepper
+      onWheel: function (event) {
+        // Side-scrolls report y === 0; they must not read as a step.
+        if (event.angleDelta.y === 0) return
+        root.stepRow(settingRow.rowName, event.angleDelta.y > 0 ? 1 : -1)
+      }
     }
 
     Column {
@@ -1105,12 +1119,25 @@ Panel {
         Text {
           textFormat: Text.PlainText
           width: Math.max(0, parent.width - valueLabel.implicitWidth
-            - (switchItem.visible ? switchItem.width : 0) - Style.space(16))
+            - (switchItem.visible ? switchItem.width : 0)
+            - (settingRow.stepper ? lessButton.width + moreButton.width + Style.space(16) : 0)
+            - Style.space(16))
           text: settingRow.settingLabel
           elide: Text.ElideRight
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
+        }
+
+        PanelActionButton {
+          id: lessButton
+          visible: settingRow.stepper
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: "󰅁"
+          tooltipText: "Shorter"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.stepRow(settingRow.rowName, -1)
         }
 
         Text {
@@ -1121,6 +1148,17 @@ Panel {
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
+        }
+
+        PanelActionButton {
+          id: moreButton
+          visible: settingRow.stepper
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: "󰅂"
+          tooltipText: "Longer"
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onClicked: root.stepRow(settingRow.rowName, 1)
         }
 
         ToggleSwitch {

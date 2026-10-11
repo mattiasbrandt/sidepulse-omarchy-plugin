@@ -6,8 +6,8 @@
 #   up        back up shell.json, install the working tree, enable it in the
 #             center section, restart the shell, wait for exactly one helper
 #   sync      install the working tree again and restart the shell
-#   position  put the bar at that edge (omarchy bar position), restart the
-#             shell, wait for exactly one helper; down puts the bar back
+#   position  put the bar at that edge (omarchy bar position), which the shell
+#             applies live, wait for exactly one helper; down puts the bar back
 #   down      disable and remove the plugin, restore shell.json from the backup if
 #             it still differs, wait for the helper to stop
 #
@@ -110,8 +110,10 @@ position)
   *) die "usage: scripts/live-check.sh position top|bottom|left|right" ;;
   esac
   # Edits the bar's position in shell.json; down restores the backup, so the bar comes back as it was.
+  # No restart: the shell rebuilds its bars from shell.json live, and a restart that lands while that
+  # rebuild runs crashed Quickshell once (segfault on exit, 2026-10-11, #38). The helper survives the rebuild.
   omarchy bar position "$2" >/dev/null || die "omarchy bar position $2 failed; run down to restore the bar"
-  restart_shell
+  wait_shell
   wait_helpers 1
   echo "live-check.sh: bar at $2; helper $(helpers)"
   ;;
@@ -126,7 +128,8 @@ down)
     echo "live-check.sh: shell.json still differs; restoring the backup over these changes:" >&2
     diff -u "$backup" "$config" >&2 || :  # diff exits 1 when it shows a change
     cp "$backup" "$config"
-    restart_shell
+    # The shell applies shell.json live; no restart while it rebuilds (see position).
+    wait_shell
   fi
   wait_helpers 0
   cmp -s "$backup" "$config" || die "shell.json differs from the backup after restoring it; the backup stays at $backup"

@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import Quickshell
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "helper"
@@ -353,10 +354,21 @@ Panel {
     else if (name === "keep-awake") stepPolicy(dx)
   }
 
+  // The bar's ModuleSlot holding this copy (the parent of the Loader that loads it). A copy is drawn when
+  // the slot is visible and has size, as BarModel.js isDrawnSlot decides; the center section's zero-size
+  // placeholder is not (Bar.qml, "a zero-size placeholder"). Without a slot, the copy's own size decides.
+  readonly property var slot: parent && parent.parent ? parent.parent : null
+  readonly property bool drawn: slot !== null
+    ? slot.visible === true && slot.width > 0 && slot.height > 0
+    : visible && width > 0 && height > 0
+
   Component.onCompleted: {
     HelperProcess.pythonPath = pythonSetting
     HelperProcess.register()
+    HelperProcess.claimIpc(root, drawn)
   }
+
+  onDrawnChanged: HelperProcess.claimIpc(root, drawn)
 
   // A helper that has just started knows no displays or notice setting yet: send
   // what was remembered, and send again whenever the remembered values change
@@ -385,7 +397,29 @@ Panel {
 
   Component.onDestruction: {
     HelperProcess.setPopupOpen(root, false)
+    HelperProcess.releaseIpc(root)
     HelperProcess.unregister()
+  }
+
+  // The IPC target is the plugin id (IPC targets are global in the shell). Only the owning copy
+  // registers it (HelperProcess.ipcOwner), so the anchor placeholder never answers. The base Panel's
+  // handler stays off (no ipcTarget); this one keeps its five calls and adds status() (docs/spec.md).
+  IpcHandler {
+    enabled: HelperProcess.ipcOwner() === root
+    target: root.moduleName
+
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.toggle() }
+    function status(): string {
+      return Status.statusJson({
+        notInstalled: HelperProcess.notInstalled,
+        agentState: root.agentState,
+        needsSetup: root.needsSetup
+      })
+    }
   }
   onPythonSettingChanged: HelperProcess.pythonPath = pythonSetting
 

@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 import sidepulse
 from sidepulse import settings as upstream_settings
-from sidepulse.battery import BatterySnapshot
+from sidepulse.battery import BatterySnapshot, program_for_battery
 from sidepulse.device_writer import MAX_LED_LINES
 from sidepulse.settings import load_settings
 
@@ -132,6 +132,23 @@ def test_a_discharging_battery_is_not_plugged(tmp_path):
     battery = helper.read_battery(tmp_path)
     assert (battery.percent, battery.is_plugged, battery.is_charging) == (15, False, False)
     assert battery.adapter_power == 0
+
+
+def test_a_battery_still_discharging_on_an_online_charger_is_charging(tmp_path):
+    # A ThinkPad turns BAT0/status to Charging about 5 s after the adapter goes online (#9's laptop pass):
+    # the charger is the truth, so the 7 s preview shows the charging pulse from the plug, not the unplugged look.
+    write_battery(tmp_path, percent=30, status="Discharging", plugged=True)
+    battery = helper.read_battery(tmp_path)
+    assert (battery.is_plugged, battery.is_charging, battery.is_charged) == (True, True, False)
+    assert "pulse" in program_for_battery(battery, led_count=2)
+
+
+def test_not_charging_on_the_charger_keeps_its_own_look(tmp_path):
+    # "Not charging" is a charge limit (e.g. a ThinkPad stopping at 80 %): plugged, but no charging pulse.
+    write_battery(tmp_path, percent=80, status="Not charging", plugged=True)
+    battery = helper.read_battery(tmp_path)
+    assert (battery.is_plugged, battery.is_charging) == (True, False)
+    assert "pulse" not in program_for_battery(battery, led_count=2)
 
 
 def test_a_full_battery_on_the_adapter_is_charged_and_plugged(tmp_path):

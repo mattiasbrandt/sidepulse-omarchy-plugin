@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.8.0...v0.9.0) (2026-10-11)
+
+
+### Features
+
+* **widget:** add IPC status, vertical bars and safeguard notices ([#43](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/43)) ([0e82b29](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/0e82b29a0b537b3d11887f0cb948e7789159ba67))
+
 ## [0.8.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.7.0...v0.8.0) (2026-10-11)
 
 

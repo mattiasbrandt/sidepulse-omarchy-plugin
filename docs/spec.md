@@ -312,6 +312,11 @@ _Filled in during grilling, one entry per answered question._
   takes the colour its LEDs show now, read from the program on the device (a
   SidePulse Pro wins, D21); the popup's device rows do the same. Without one,
   the legend colours above apply.
+  *Amended in #8:* the icon's LEDs animate with that device's live frames, as its
+  popup row draws them (at full brightness, D21), while the device shows Agent.
+  The icon follows the product it is drawn as: a SidePulse Pro if one is
+  connected, else the first device. With that device Off, or no device, or no
+  frames (the Bar LEDs' engine is unavailable), the colours above apply.
 - **D13 Settings UI:** all inside the one popup — Sessions (top), Devices
   (per-device on/off, display mode, brightness), Keep awake (policy), and a
   collapsible Settings section (hooks per provider, Bar LEDs on/off, idle
@@ -545,6 +550,11 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   since a fresh helper starts closed. While closed no device engine steps and no
   device frame is sent; the bar frames are unaffected. On open, the device frames
   are sent at the next pump, not suppressed as unchanged.
+  *Amended in #8 (icon):* `frame` with `target: icon` carries the bar icon's
+  device's frames (D12). That device steps even while every popup is closed;
+  every other device steps only while one is open, and each steps once per frame
+  whoever reads it. `null` clears an icon that was lit; with no device ever, no
+  icon frame is sent.
 
 ### Widget behaviour
 

@@ -21,6 +21,9 @@ qmllint=$(command -v qmllint || true)
 
 cd "$(git rev-parse --show-toplevel)"
 mapfile -t files < <(git ls-files -- '*.qml' ':!:spikes/**')
+# A singleton is only recognised when qmllint reads the qmldir that declares
+# it; linting the singleton's own file does not look one up.
+mapfile -t qmldirs < <(git ls-files -- '*qmldir' ':!:spikes/**')
 if [ "${#files[@]}" -eq 0 ]; then
   echo "qmllint.sh: no QML files to lint"
   exit 0
@@ -30,5 +33,7 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 ln -s "$(realpath "$shell_dir")" "$root/qs"
 
-"$qmllint" --max-warnings 0 -I "$root" "${files[@]}"
+qmldir_args=()
+for qmldir in "${qmldirs[@]}"; do qmldir_args+=(-i "$qmldir"); done
+"$qmllint" --max-warnings 0 -I "$root" "${qmldir_args[@]}" "${files[@]}"
 echo "qmllint.sh: ${#files[@]} file(s) clean"

@@ -16,6 +16,11 @@ dev = [
 [tool.uv]
 package = false
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "spikes"]
+# The helper is a script, not a package: tests import it by module name.
+pythonpath = ["helper"]
+
 # The commit the spec's research (docs/spec.md, appendix) and the user's
 # SidePulse install were checked against.
 [tool.uv.sources]

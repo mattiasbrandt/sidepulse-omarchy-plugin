@@ -83,7 +83,14 @@ _Filled in during grilling, one entry per answered question._
     it). The service writes `latest.json` (tmp + rename) within the same second
     as the hook line. Watch the **directory** for `MOVED_TO latest.json`, and
     re-run the rules on a timer so ages and staleness advance between writes.
-    Probe: `spikes/state_reader.py`.
+    Probe: was `spikes/state_reader.py`; since #10 its code is the helper's state
+    path in `helper/sidepulse_omarchy.py`.
+  - *Amended in #10:* the four-state mapping and its colours (`state_for_mode`
+    and the Ask/Working/Done/Idle legend, `status_bar.py` at 6d55225) are copied
+    into the helper, because that module needs PyObjC and cannot be imported on
+    Linux. `tests/test_state.py` reads the upstream source and fails when the
+    mapping, the state labels or the colours drift. Everything else calls
+    upstream's rules.
   - Linux gaps (battery reader, keep-awake/lid, Bar LED frames) live in a small
     Python helper in the plugin repo that imports upstream's own code from
     the SidePulse venv (aggregate rules, settings load/save, keep-awake
@@ -105,6 +112,9 @@ _Filled in during grilling, one entry per answered question._
     running until `omarchy restart shell`). Keep the singleton a thin process
     owner and line dispatcher; logic lives in the helper and in ordinary
     components. Note in AGENTS.md's live-check step.
+  - *Amended in #10:* the singleton lives in `helper/` and Panel.qml imports it with
+    `import "helper"`. A qmldir in the plugin root, imported with `import "."`,
+    made the widget extend itself (Panel.qml is also the base type's name).
   - `bar` is still null in a widget's `Component.onCompleted` (injected after).
 - **D6 Bar LEDs engine:** the helper runs upstream's `sdled.wasm` via the
   `wasmtime` Python package (49.0.0, `py3-none-manylinux1_x86_64` wheel,
@@ -248,6 +258,12 @@ _Filled in during grilling, one entry per answered question._
   SidePulse not installed (show the install command), service stopped ("start
   service" runs `sidepulse service start`), no device ("plug in a SidePulse").
   Agent State keeps working without a device.
+  *Amended in #10:* the helper's `setup` event lists the items in that order
+  (`install`, `service`, `device`). The install item shows upstream's installer
+  line (`curl -fsSL https://sidepulse.io/setup.sh | bash`, from its README); the
+  service item carries the `start-service` action, which runs
+  `python -I -m sidepulse service start` in the SidePulse venv. A missing venv
+  is reported by the shell, since no helper can run there.
 - **D20 Ask notification (plan review):** opt-in setting "Notify when a
   session asks", off by default; clicking the notification jumps to the
   session (D8). Beyond Mac parity: the Mac app sends no agent notifications.
@@ -275,13 +291,14 @@ _Filled in during grilling, one entry per answered question._
 ```
 sidepulse-omarchy-plugin/                    (repo root = plugin root)
 ├── manifest.json        id io.github.mattiasbrandt.sidepulse, kinds [bar-widget]
-├── qmldir               declares the singleton below
-├── HelperProcess.qml    pragma Singleton: owns the one helper Process, refcounts
-│                        widget copies (stop at 0, debounced), parses NDJSON (D5)
-├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup + IpcHandler
+├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup
 ├── BarLeds.qml          Bar LEDs, reparented into the bar window (D7, D21)
 ├── *.qml / Model.js     popup sections: Sessions, Devices, KeepAwake, Settings, HookLog
 ├── helper/
+│   ├── qmldir           declares the singleton below (*amended in #10*: imported
+│   │                    as "helper", not from the root: see the note under D5)
+│   ├── HelperProcess.qml  pragma Singleton: owns the one helper Process, refcounts
+│   │                    widget copies (stop at 0, debounced), parses NDJSON (D5)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
@@ -295,17 +312,24 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   (venv path overridable via widget setting `sidepulsePython`; default also
   tries `sidepulse`'s shebang interpreter).
 - **Protocol:** NDJSON. Stdout events, each `{"type": ..., ...}`:
-  `hello` (helper version, upstream version, capabilities map with reasons),
-  `state` (aggregate mode, four-state label, colour, active_count, sessions[]),
+  `hello` (protocol 1, helper version, upstream version, capabilities map with
+  reasons), `state` (four-state label, colour, urgent for Ask, active_count,
+  stale_count, top session), `setup` (missing items in order, D19), `result`
+  (outcome of a command), `error` (feature, message),
   `devices` (id, name, path, led_display, brightness, kind Dot/Pro, led count),
   `hooks` (doctor --json payload), `power` (battery %, plugged, lid),
   `awake` (holding bool, reason), `frame` (RGB per Bar LED),
-  `log` (recent hook decision rows), `error` (feature, message).
-  Stdin commands: `set-device-enabled`, `set-brightness`, `set-display`,
+  `log` (recent hook decision rows).
+  Stdin commands: `refresh`, `start-service` (*amended in #10*: `setup` and
+  `result` are new), `set-device-enabled`, `set-brightness`, `set-display`,
   `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
-  `hooks-uninstall`, `open-session`, `refresh`. `open-session` answers with
+  `hooks-uninstall`, `open-session`. `open-session` answers with
   the D8 lookup state (stopped → resumed, live → focused or located,
   unresolved → explanation).
+  *Amended in #10:* `state` and `setup` are re-sent on change, not on a fixed
+  schedule. The helper re-runs the rules every second and re-checks setup every
+  five seconds, so a stopped service or an unplugged device shows up without a
+  restart.
 - **Upstream reuse (D4):** state = watch the `latest.json` directory
   (inotify `MOVED_TO latest.json`; the service writes tmp + rename) and run
   upstream's `snapshot_from_statuses` on it with

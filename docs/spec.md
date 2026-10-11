@@ -210,6 +210,14 @@ _Filled in during grilling, one entry per answered question._
   `custom`) at start and after every takeover. That also repairs a device
   left Manual by a crash mid-takeover. This one per-device value is the
   deliberate exception to "settings through upstream".
+  *Amended in #5:* the value lives in the widget's shell.json entry as
+  `deviceDisplays` (device id → `agent` | `battery` | `off`). The widget sends
+  the whole map to the helper on each helper hello and on each change
+  (`set-displays`); the helper reconciles every connected device to it on each
+  tick. Off writes upstream's `off` program once per helper, not on every tick.
+  Battery is Manual with the same off program until the laptop battery reader
+  (#11) drives it, so the device never shows a stale frame. Brightness goes
+  through upstream's `with_device_brightness` (0-255; the widget sends percent).
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -237,6 +245,10 @@ _Filled in during grilling, one entry per answered question._
   settings.json (`virtual_status_device_enabled`, `sleep_prevention_policy`,
   `agent_list.*`, `devices[]`) via the helper, so they mean the same thing as
   on the Mac; only plugin-presentation settings go in the shell.json entry.
+  *Amended in #5:* upstream's `save_settings` rewrites settings.json from its
+  own model and drops keys it does not know (top level and inside `devices[]`).
+  The helper restores those keys after each save, so a newer upstream's keys
+  and hand-added ones survive a display or brightness change.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.
@@ -332,13 +344,13 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
   stale_count, top session), `setup` (missing items in order, D19), `result`
   (outcome of a command), `error` (feature, message), `clear` (feature
   recovered; *amended in #10*),
-  `devices` (id, name, path, led_display, brightness, kind Dot/Pro, led count),
+  `devices` (*amended in #5*: id, name, path, product and kind Dot/Pro, LED
+  count, remembered display, brightness percent; sent on change),
   `hooks` (doctor --json payload), `power` (battery %, plugged, lid),
   `awake` (holding bool, reason), `frame` (RGB per Bar LED),
   `log` (recent hook decision rows).
   Stdin commands: `refresh`, `start-service` (*amended in #10*: `setup` and
-  `result` are new), `set-device-enabled`, `set-brightness`, `set-display`,
-  `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
+  `result` are new), `set-displays`, `set-brightness`, `set-policy`, `set-bar-leds`, `set-agent-list`, `hooks-install`,
   `hooks-uninstall`, `open-session`. `open-session` answers with
   the D8 lookup state (stopped → resumed, live → focused or located,
   unresolved → explanation).

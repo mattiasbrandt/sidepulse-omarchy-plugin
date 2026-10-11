@@ -27,6 +27,12 @@ either changes or names the decision it departs from.
   something accepts on `events.sock`, so that socket belongs to upstream alone.
 - **One helper per shell (D5),** spawned by the widget, exiting when stdin
   closes, releasing any inhibitor and LED takeover on exit.
+- **Shown state follows its source (D5, D14).** When a read fails or a process
+  ends, the widget shows *unavailable* or nothing, never the last good value;
+  and a timer, when it fires, re-checks the condition that scheduled it. Both
+  slipped through #24: the bar kept Working after `latest.json` became
+  unreadable, and a crash-restart timer started the helper after the last
+  widget had gone (#26).
 
 ## Distribution
 

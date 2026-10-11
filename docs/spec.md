@@ -250,6 +250,12 @@ _Filled in during grilling, one entry per answered question._
   `session_resume_command` run as `xdg-terminal-exec -- sh -c <command>` in the
   session cwd. Only the helper's own latest list is searched, so a session that
   has dropped out of it answers "no longer listed".
+  *Amended after #12 (daily use):* the list leaves out a finished (Done) session
+  whose folder no longer exists, such as a deleted worktree: it cannot be resumed,
+  and Codex review runs in removed worker worktrees crowded the ten rows. It is
+  dropped before the limit (`listed_sessions` around upstream's `recent_statuses`),
+  so it takes no row. Running and Ask sessions always show, and so does a session
+  with no folder recorded.
 - **D9 LED on/off:** per-device. Off = set that device's `led_display` to
   `custom` in upstream settings.json (service skips it; re-read each 1 s)
   and write `off`; On = set back to `agent`. Persists; uses upstream's own

@@ -596,6 +596,11 @@ def notify_argv(summary: str, body: str) -> list[str]:
     return ["notify-send", "--app-name=SidePulse", "--wait", f"--action={NOTIFY_ACTION}=Open session", summary, body]
 
 
+def plain_notify_argv(summary: str) -> list[str]:
+    """notify-send for a notice with no action (D11): it returns at once, so its exit is all there is to read."""
+    return ["notify-send", "--app-name=SidePulse", summary]
+
+
 def display_of(displays: dict[str, str], device_id: str, battery_offered: bool = True) -> str:
     """The widget's remembered Display for a device: Agent when none is
     remembered, when the value is not one this helper offers, or when it is
@@ -1554,6 +1559,32 @@ def awake_request(policy: str, *, agents_active: bool, agents_reason: str, batte
     return True, "always" if policy == SLEEP_PREVENTION_ALWAYS else agents_reason
 
 
+SAFEGUARD_PAUSED = "Keep awake paused by the battery safeguard: {} %, unplugged"
+SAFEGUARD_RESUMED = "Keep awake resumed: plugged in"
+
+
+def safeguard_blocks(policy: str, *, agents_active: bool, safeguard_active: bool) -> bool:
+    """Whether the battery safeguard is what keeps the lock off: the policy wants it and the safeguard says no."""
+    return policy != SLEEP_PREVENTION_NEVER and awake_policy_should_hold(policy, agents_active=agents_active) \
+        and safeguard_active
+
+
+def percent_number(value: float | int) -> str:
+    """A percent's number as format_percent_value writes it (a whole number, or one decimal), without its sign."""
+    number = float(value)
+    return str(int(number)) if number.is_integer() else f"{number:.1f}"
+
+
+def safeguard_notice(previous: bool | None, blocking: bool, holding: bool, percent: float) -> str | None:
+    """The notice for a change of the safeguard's block (D11), or None. The first read (previous None) is silent,
+    since a lock that was never held is not let go; so is a block that ends because the policy stopped wanting one."""
+    if previous is None or blocking == previous:
+        return None
+    if blocking:
+        return SAFEGUARD_PAUSED.format(percent_number(percent))
+    return SAFEGUARD_RESUMED if holding else None
+
+
 def inhibit_argv() -> list[str]:
     """The command that takes the sleep lock (D11).
 
@@ -1658,13 +1689,17 @@ class Helper:
         # None until the first read, so sessions already asking at start-up do not notify.
         self.notify_on_ask = False
         self.asking: set[tuple[str, str]] | None = None
-        self.notifications: list[tuple[tuple[str, str], subprocess.Popen, Any]] = []
+        # Keys are the session a click opens; None for a notice with no action (the battery safeguard, D11).
+        self.notifications: list[tuple[tuple[str, str] | None, subprocess.Popen, Any]] = []
         # Keep awake (D11): the agents' State as the last read saw it (None without a read), the lock,
         # the predicate's grace clock and the battery's sysfs root. The clock and root are injectable for tests.
         self.mode: Any = None
         self.inhibitor = SleepInhibitor()
         self.awake_controller: Any = None
         self.last_awake: dict[str, Any] | None = None
+        # Whether the battery safeguard is what keeps the lock off (D11), as the last read saw it: None until the
+        # first read, so a helper that starts blocked does not announce a lock it never held.
+        self.safeguard_blocking: bool | None = None
         self.power_root = POWER_SUPPLY_ROOT
         self.clock: Callable[[], float] = time.monotonic
         # Laptop (D9, D10). The battery as the last tick read it (None: unreadable) and whether the Battery
@@ -2174,6 +2209,8 @@ class Helper:
 
         settings = load_settings()
         policy = settings.sleep_prevention_policy
+        battery = self.read_battery_or_none()
+        threshold = settings.sleep_prevention_min_battery_percent
         if self.capabilities.get("keep_awake", {}).get("ok"):
             if self.awake_controller is None:
                 from sidepulse.keep_awake import KeepAwakeController
@@ -2184,11 +2221,13 @@ class Helper:
                 policy,
                 agents_active=agents_active,
                 agents_reason=agents_reason,
-                battery=self.read_battery_or_none(),
-                threshold=settings.sleep_prevention_min_battery_percent,
+                battery=battery,
+                threshold=threshold,
             )
+            safeguard_active, _ = sleep_prevention_battery_safeguard(battery, threshold)
+            blocking = safeguard_blocks(policy, agents_active=agents_active, safeguard_active=safeguard_active)
         else:
-            hold, reason = False, "keep awake is unavailable"
+            hold, reason, blocking = False, "keep awake is unavailable", False
         error = self.inhibitor.update(hold)
         if error is None:
             self.resolve("keep_awake")
@@ -2198,6 +2237,17 @@ class Helper:
         if event != self.last_awake:
             self.last_awake = event
             self.emit(event)
+        notice = safeguard_notice(self.safeguard_blocking, blocking, hold,
+                                  battery.percent if battery is not None else 0.0)
+        self.safeguard_blocking = blocking
+        if notice is not None:
+            self.notify_safeguard(notice)
+
+    def notify_safeguard(self, text: str) -> None:
+        """A plain desktop notice about the battery safeguard (D11): not the Ask switch, no action, no wait."""
+        if not self.capabilities.get("notify", {}).get("ok"):
+            return  # the Notifications problem line already says why (hello)
+        self.start_notice(plain_notify_argv(text), None)
 
     def read_battery_or_none(self) -> Any:
         """The battery for the safeguard. Unreadable is reported (D14) and counts as unknown, as upstream does."""
@@ -2300,12 +2350,14 @@ class Helper:
 
     def notify(self, status: Any) -> None:
         summary, body = notification_text(status)
-        key = (status.provider.lower(), status.session_id)
+        self.start_notice(notify_argv(summary, body), (status.provider.lower(), status.session_id))
+
+    def start_notice(self, argv: list[str], key: tuple[str, str] | None) -> None:
+        """Start one notify-send child; key names the session a click opens, None for a notice with no action."""
         # stderr goes to a file, not a pipe nobody reads: a notice that stays up must not block.
         err = tempfile.TemporaryFile()
         try:
-            proc = subprocess.Popen(notify_argv(summary, body), stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.PIPE, stderr=err)
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err)
         except OSError as exc:
             err.close()
             self.report("notify", f"cannot run notify-send: {exc}")
@@ -2328,7 +2380,7 @@ class Helper:
             except BlockingIOError:
                 continue
             if data:
-                if NOTIFY_ACTION in data.decode(errors="replace").split():
+                if key is not None and NOTIFY_ACTION in data.decode(errors="replace").split():
                     self.open_session({"provider": key[0], "session_id": key[1]})
                 continue
             self.finish_notification(proc, err)

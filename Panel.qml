@@ -8,6 +8,7 @@ import qs.Ui
 import "helper"
 import "helper/sessions.mjs" as Sessions
 import "helper/settings.mjs" as Settings
+import "helper/status.mjs" as Status
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The
@@ -60,15 +61,12 @@ Panel {
       ? dim
       : agentState.colour
 
-  readonly property string tooltipText: {
-    if (HelperProcess.notInstalled) return "SidePulse: not installed"
-    if (!agentState) return "SidePulse: starting"
-    let text = "SidePulse: " + agentState.label
-    if (agentState.active_count > 0) text += ", " + agentState.active_count + " active"
-    if (agentState.top) text += ", " + agentState.top.display_name
-    if (needsSetup) text += " (setup needed)"
-    return text
-  }
+  // The tooltip ends in "· click for details", the left click's only action (helper/status.mjs).
+  readonly property string tooltipText: Status.tooltipText({
+    notInstalled: HelperProcess.notInstalled,
+    agentState: agentState,
+    needsSetup: needsSetup
+  })
 
   readonly property string heroMeta: {
     if (HelperProcess.notInstalled) return "Not installed"

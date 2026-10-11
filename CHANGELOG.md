@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.5.0...v0.6.0) (2026-10-11)
+
+
+### Features
+
+* **widget:** keep the machine awake while agents work ([#36](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/36)) ([b7409c8](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/b7409c8c2eec623f4b645c287fff59bc58e1f0df))
+
 ## [0.5.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.4.0...v0.5.0) (2026-10-11)
 
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.mattiasbrandt.sidepulse",
   "name": "SidePulse",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "Mattias Brandt",
   "license": "MIT",
   "description": "SidePulse devices and AI coding agent status in the Omarchy bar.",

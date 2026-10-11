@@ -6,8 +6,11 @@
 #   up    back up shell.json, install the working tree, enable it in the
 #         center section, restart the shell, wait for exactly one helper
 #   sync  install the working tree again and restart the shell
-#   down  disable and remove the plugin, wait for the helper to stop, check
-#         shell.json against the backup
+#   down  disable and remove the plugin, restore shell.json from the backup if
+#         it still differs, wait for the helper to stop
+#
+# A plugin already installed (a release you run day to day) is never touched:
+# up refuses, since down removes the directory it installed.
 #
 # Every step restarts the shell instead of relying on hot reload: the shell
 # never reloads the plugin's singleton, so a long-running shell keeps an old
@@ -81,6 +84,7 @@ cd "$(git rev-parse --show-toplevel)"
 case ${1:-} in
 up)
   [ ! -e "$backup" ] || die "a check is already running ($backup exists); run down first"
+  [ ! -e "$plugin_dir" ] || die "$plugin_dir already exists (an installed copy?); remove or disable it yourself first"
   cp "$config" "$backup"
   install_tree
   rescan
@@ -99,14 +103,19 @@ sync)
   ;;
 down)
   [ -e "$backup" ] || die "no check is running ($backup is missing)"
-  # Carry on when disable fails: the shell.json diff below reports what is left.
-  omarchy plugin disable "$id" || echo "live-check.sh: disable failed; continuing" >&2
+  # Carry on when disable fails: the backup is restored below.
+  omarchy plugin disable "$id" || echo "live-check.sh: disable failed; restoring the backup instead" >&2
   rm -rf "$plugin_dir"
   rescan
-  wait_helpers 0
-  if ! diff -u "$backup" "$config"; then
-    die "shell.json differs from the backup; the backup stays at $backup"
+  if ! cmp -s "$backup" "$config"; then
+    # This also reverts bar changes made by hand during the check.
+    echo "live-check.sh: shell.json still differs; restoring the backup over these changes:" >&2
+    diff -u "$backup" "$config" >&2 || :  # diff exits 1 when it shows a change
+    cp "$backup" "$config"
+    restart_shell
   fi
+  wait_helpers 0
+  cmp -s "$backup" "$config" || die "shell.json differs from the backup after restoring it; the backup stays at $backup"
   rm "$backup"
   echo "live-check.sh: down; bar restored, sidepulse.service $(systemctl --user is-active sidepulse.service || true)"
   ;;

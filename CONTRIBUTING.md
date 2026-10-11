@@ -90,6 +90,10 @@ CI (`.github/workflows/ci.yml`) runs on every PR and on `main`:
 | qmllint against the Omarchy shell | `scripts/qmllint.sh` |
 | actionlint | `actionlint` |
 
+The live check on the bar runs only locally, because CI has no Omarchy session:
+`scripts/live-check.sh up`, exercise the change, `scripts/live-check.sh down`
+(AGENTS.md has the details).
+
 Every action is pinned to a full commit SHA with its `# vX.Y.Z`; Dependabot
 moves the pins weekly.
 

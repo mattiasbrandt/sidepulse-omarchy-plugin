@@ -42,28 +42,21 @@ Before calling a change done, run every check in the **Checks** table of
 fails on any qmllint warning, and resolves Omarchy's `qs.*` imports the way
 Quickshell does.
 
-Live check: install the working tree into the **center** section of the bar
-(the local test placement; the manifest default for users stays `right`),
-exercise the change, then put the bar back exactly as it was:
+Live check: run the working tree in the **center** section of the bar (the
+local test placement; the manifest default for users stays `right`), exercise
+the change, then put the bar back exactly as it was:
 
 ```sh
-cp ~/.config/omarchy/shell.json /tmp/shell.json.before-check
-rsync -a --delete --exclude .git --exclude .claude --exclude .pytest_cache \
-  ./ ~/.config/omarchy/plugins/io.github.mattiasbrandt.sidepulse/
-omarchy-shell shell rescanPlugins
-omarchy plugin enable io.github.mattiasbrandt.sidepulse --section center
-# ... check the change; the shell hot-reloads on every rsync ...
-omarchy plugin disable io.github.mattiasbrandt.sidepulse
-rm -rf ~/.config/omarchy/plugins/io.github.mattiasbrandt.sidepulse
-omarchy-shell shell rescanPlugins
-diff /tmp/shell.json.before-check ~/.config/omarchy/shell.json
+scripts/live-check.sh up     # back up shell.json, install, enable, restart the shell
+scripts/live-check.sh sync   # after each edit: install again, restart the shell
+scripts/live-check.sh down   # remove it; fails unless shell.json matches the backup
 ```
 
-The center section also exercises the bar's zero-size anchor copy of a center
-widget, which the single-helper refcount (D5) has to count correctly.
-
-Hot reload skips the plugin's QML singleton (it lives as long as the shell),
-so a change to the singleton needs `omarchy restart shell` before the check.
+The script restarts the shell instead of relying on hot reload, which never
+reloads the plugin's singleton: a long-running shell keeps an old one, and the
+widget then starts no helper. The center section also exercises the bar's
+zero-size anchor copy of a center widget, which the single-helper refcount
+(D5) has to count correctly; `up` and `sync` wait for exactly one helper.
 
 Hardware a change needs but this machine lacks (battery, lid) goes on the
 verification ticket's laptop checklist (#9).

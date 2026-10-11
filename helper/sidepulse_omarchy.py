@@ -22,6 +22,9 @@ Events (stdout):
             open-session
   awake     the keep-awake policy (never, agents, always), whether the sleep lock
             is held now, and why (D11)
+  frame     the RGB of each LED, 0-255, for the Bar LEDs ("target": "bar") or for
+            one device's program ("target": "device", "device": id). Sent only
+            when the colours change; "leds": null hides the Bar LEDs (D6, D7)
 
 Commands (stdin): {"cmd": "refresh"}, {"cmd": "start-service"},
 {"cmd": "set-policy", "policy": "never" | "agents" | "always"} (D11),
@@ -30,7 +33,8 @@ remembered map; the helper reconciles every connected device to it, D9), and
 {"cmd": "set-brightness", "device": id, "percent": 0-100},
 {"cmd": "hooks-install" | "hooks-uninstall", "provider": name} (D13),
 {"cmd": "set-agent-list", "idle_timeout_seconds"?, "recent_session_retention_seconds"?},
-{"cmd": "set-bar-leds", "enabled": bool} and {"cmd": "set-notify", "enabled": bool} (D20).
+{"cmd": "set-bar-leds", "enabled": bool} and {"cmd": "set-notify", "enabled": bool} (D20),
+{"cmd": "set-popup", "open": bool}: whether a popup is open; device frames flow only while it is.
 
 It never binds events.sock: that socket belongs to upstream's service (D4).
 """
@@ -79,6 +83,13 @@ DISPLAYS = ("agent", "off")
 DEFAULT_DISPLAY = "agent"
 UPSTREAM_DISPLAY = {"agent": "agent", "off": "custom"}
 PRODUCT_NAMES = {"dot": "SidePulse Dot", "pro": "SidePulse Pro"}
+# LED frames (D6): upstream's virtual_device.py FRAME_RATE and IDLE_FRAME_RATE. A
+# drift test in tests/test_bar_leds.py reads both from upstream's source.
+FRAME_RATE = 60.0
+IDLE_FRAME_RATE = 12.0
+FRAME_BUDGET_MS = 1000.0 / FRAME_RATE
+# The device id upstream gives its SidePulse Notch (virtual_device.VIRTUAL_DEVICE_ID); its brightness is the Notch's.
+NOTCH_DEVICE_ID = "virtual:status-bar"
 
 # Upstream's four-state UI mapping is `state_for_mode` in status_bar.py (lines
 # 461-472 at upstream 6d55225). That module needs PyObjC, so it cannot be
@@ -142,6 +153,13 @@ REQUIRED_NAMES = {
         "sidepulse.battery": ("BatterySnapshot",),
         "sidepulse.settings": ("load_settings", "SLEEP_PREVENTION_CHOICES"),
     },
+    # The Bar LEDs' frames (D6): upstream's engine resource and error names, its programs and its animation settings.
+    # The wasmtime package and the packaged sdled.wasm are probed separately, in probe_capabilities.
+    "bar_leds": {
+        "sidepulse.led_wasm": ("load_packaged_wasm", "ERROR_NAMES"),
+        "sidepulse.led_status": ("program_for_agent_mode", "display_state_for_mode", "LedDisplayState"),
+        "sidepulse.settings": ("AgentMonitorSettings.agent_animation", "AgentMonitorSettings.brightness_for_device"),
+    },
 }
 WASMTIME_REASON = "wasmtime is not installed in the SidePulse venv; the Bar LEDs need it"
 
@@ -184,7 +202,8 @@ def probe_capabilities() -> dict[str, dict[str, Any]]:
         caps[feature] = _probe_names(modules)
     if caps["keep_awake"]["ok"]:
         caps["keep_awake"] = _probe_inhibit()
-    caps["bar_leds"] = _probe_wasmtime()
+    if caps["bar_leds"]["ok"]:
+        caps["bar_leds"] = _probe_bar_leds()
     caps["notify"] = _probe_notify()
     return caps
 
@@ -211,11 +230,18 @@ def _probe_names(modules: dict[str, tuple[str, ...]]) -> dict[str, Any]:
     return {"ok": True, "reason": ""}
 
 
-def _probe_wasmtime() -> dict[str, Any]:
+def _probe_bar_leds() -> dict[str, Any]:
+    """The Bar LEDs need wasmtime (D6) and upstream's sdled.wasm, read from the installed package."""
     try:
         importlib.import_module("wasmtime")
     except ImportError:
         return {"ok": False, "reason": WASMTIME_REASON}
+    from sidepulse.led_wasm import load_packaged_wasm
+
+    try:
+        load_packaged_wasm()
+    except OSError as exc:
+        return {"ok": False, "reason": f"upstream's sdled.wasm cannot be read from the SidePulse install: {exc}"}
     return {"ok": True, "reason": ""}
 
 
@@ -594,6 +620,36 @@ def shown_program(device: Device) -> str | None:
         return None
 
 
+def icon_device(devices: list[Device]) -> Device | None:
+    """The device the bar icon is drawn as (D12, D21): a SidePulse Pro wins, else the first device."""
+    for device in devices:
+        if device.kind == "pro":
+            return device
+    return devices[0] if devices else None
+
+
+def full_brightness_program(text: str | None, brightness: int) -> str | None:
+    """The device's program as its row plays it: at full brightness (D21).
+
+    Upstream writes the program through apply_brightness, which scales every
+    `brightness N` line by the device's brightness (0-255). A screen pixel at a few
+    percent is black where a real LED still shines, so the row undoes that scaling;
+    the brightness slider shows the brightness. A device at 0 plays at full.
+    """
+    if text is None:
+        return None
+    lines = []
+    for line in text.splitlines():
+        match = re.fullmatch(r"\s*brightness\s+(\d+)\s*", line, re.IGNORECASE)
+        if match is None:
+            lines.append(line)
+        elif brightness <= 0:
+            lines.append("brightness 255")
+        else:
+            lines.append(f"brightness {min(255, round(int(match.group(1)) * 255 / brightness))}")
+    return "\n".join(lines)
+
+
 def set_device_brightness(device: Device, percent: float) -> None:
     """Upstream's brightness is 0-255 per device; the widget speaks percent."""
     from sidepulse.settings import normalize_brightness
@@ -638,6 +694,179 @@ class DirWatch:
             names.append(data[offset + 16 : offset + 16 + length].rstrip(b"\0").decode(errors="replace"))
             offset += 16 + length
         return names
+
+
+# --- Bar LEDs and device frames (D6, D7, D21) ---------------------------------
+
+INPUT_SIZE = 512  # the engine's input buffer (sdled.wasm)
+INPUT_TOO_LONG = 513  # upstream's length for a program over the buffer (led_wasm.py)
+
+
+def _i32(value: int) -> int:
+    """JavaScript's ToInt32, for values passed as i32 to the engine."""
+    return ((int(value) + 2**31) % 2**32) - 2**31
+
+
+def _engine_input(text: str) -> tuple[bytes, int]:
+    """The UTF-16 code units of `text` written the way upstream's writeInput() writes them: returns (buffer, length)."""
+    data = str(text).encode("utf-16-le", "surrogatepass")
+    units = [data[i] | (data[i + 1] << 8) for i in range(0, len(data), 2)]
+    buffer = bytearray(INPUT_SIZE)
+    length = 0
+    for code in units:
+        if code <= 127:
+            if length < INPUT_SIZE:
+                buffer[length] = code
+            length += 1
+        elif code <= 2047:
+            if length < INPUT_SIZE:
+                buffer[length] = (192 | (code >> 6)) & 0xFF
+            if length + 1 < INPUT_SIZE:
+                buffer[length + 1] = (128 | (code & 63)) & 0xFF
+            length += 2
+        else:
+            if length < INPUT_SIZE:
+                buffer[length] = (224 | (code >> 12)) & 0xFF
+            if length + 1 < INPUT_SIZE:
+                buffer[length + 1] = (128 | ((code >> 6) & 63)) & 0xFF
+            if length + 2 < INPUT_SIZE:
+                buffer[length + 2] = (128 | (code & 63)) & 0xFF
+            length += 3
+    return bytes(buffer), length
+
+
+class SdLedWasm:
+    """Upstream's sdled.wasm run by wasmtime (D6).
+
+    The call sequence of upstream's SdLedWasmController (led_wasm.py), which
+    runs the same module in JavaScriptCore on macOS: the engine is reset on
+    first use, a program is parsed into the input buffer, and each step writes
+    count x 3 RGB bytes at the output pointer. tests/test_bar_leds.py replays the
+    reference cases of spikes/wasm/compare.py and upstream's test vectors.
+    """
+
+    def __init__(self, led_count: int = 8, wasm_bytes: bytes | None = None) -> None:
+        import wasmtime
+        from sidepulse.led_wasm import load_packaged_wasm
+
+        self.led_count = 2 if int(led_count) == 2 else 8
+        if wasm_bytes is None:
+            wasm_bytes = load_packaged_wasm()
+        engine = wasmtime.Engine()
+        self._store = wasmtime.Store(engine)
+        module = wasmtime.Module(engine, wasm_bytes)
+        exports = wasmtime.Instance(self._store, module, []).exports(self._store)
+        self._memory = exports["memory"]
+        self._reset_fn = exports["sdled_reset"]
+        self._parse_fn = exports["sdled_parse"]
+        self._step_fn = exports["sdled_step"]
+        self._input_ptr = exports["sdled_input_ptr"](self._store)
+        self._output_ptr = exports["sdled_output_ptr"](self._store)
+        self._initialized = False
+
+    def _ensure_initialized(self, now_ms: float) -> None:
+        if not self._initialized:
+            self._reset_fn(self._store, self.led_count, _i32(math.floor(now_ms)))
+            self._initialized = True
+
+    def parse(self, text: str, now_ms: float):
+        """Parse a program; returns upstream's LedWasmParseResult (ok, error, error_name, line, column)."""
+        from sidepulse.led_wasm import ERROR_NAMES, LedWasmParseResult
+
+        self._ensure_initialized(now_ms)
+        buffer, length = _engine_input(text)
+        self._memory.write(self._store, buffer, self._input_ptr)
+        packed = self._parse_fn(self._store, self.led_count,
+                                INPUT_TOO_LONG if length > INPUT_SIZE else length,
+                                _i32(math.floor(now_ms))) & 0xFFFFFFFF
+        error = (packed >> 8) & 255
+        return LedWasmParseResult(
+            ok=(packed & 1) == 1,
+            error=error,
+            error_name=ERROR_NAMES[error] if error < len(ERROR_NAMES) else f"error-{error}",
+            line=(packed >> 16) & 255,
+            column=(packed >> 24) & 255,
+        )
+
+    def step(self, now_ms: float) -> list[list[int]]:
+        """The RGB of each LED at this time, 0-255."""
+        self._ensure_initialized(now_ms)
+        self._step_fn(self._store, self.led_count, _i32(math.floor(now_ms)))
+        raw = self._memory.read(self._store, self._output_ptr, self._output_ptr + self.led_count * 3)
+        raw = bytes(raw)
+        return [[raw[i], raw[i + 1], raw[i + 2]] for i in range(0, len(raw), 3)]
+
+
+class LedProgram:
+    """One LED program on its own engine (D6): the frames it plays.
+
+    Parsed again only when its text changes, as upstream's setProgram_ does. A
+    program that does not parse, or no program, is dark: the frames are zeros,
+    and load() returns the reason so the helper reports it (D14), never a
+    stand-in animation.
+    """
+
+    def __init__(self, led_count: int) -> None:
+        self.led_count = 2 if int(led_count) == 2 else 8
+        self.engine: SdLedWasm | None = None
+        self.text: str | None = None
+        self.lit = False
+        self.problem: str | None = None
+
+    def load(self, text: str | None, now_ms: float) -> str | None:
+        """Parse `text` when it is new. Returns why it does not play, or None."""
+        if text == self.text:
+            return self.problem
+        self.text = text
+        self.lit = False
+        self.problem = None
+        if text is None:
+            return None
+        if self.engine is None:
+            self.engine = SdLedWasm(self.led_count)
+        result = self.engine.parse(text, now_ms)
+        if not result.ok:
+            self.problem = (f"a program does not parse: {result.error_name} at line {result.line}, "
+                            f"column {result.column}")
+            return self.problem
+        self.lit = True
+        return None
+
+    def frame(self, now_ms: float) -> list[list[int]]:
+        """The LEDs now; zeros while dark."""
+        if not self.lit or self.engine is None:
+            return [[0, 0, 0] for _ in range(self.led_count)]
+        return self.engine.step(now_ms)
+
+
+def bar_led_count(devices: list["Device"]) -> int:
+    """D21: 2 LEDs for a lone SidePulse Dot; 8 for a Pro, for none, and for both (upstream prefers the Pro)."""
+    return 2 if devices and all(device.kind == "dot" for device in devices) else 8
+
+
+def bar_program(settings: Any, mode: Any, led_count: int) -> str:
+    """The program the Bar LEDs play for a State: the call upstream's Notch makes (status_bar.py
+    sync_virtual_status_device): the State's program with the user's animation for it, at the
+    Notch's brightness (upstream's per-device value, 255 unless set)."""
+    from sidepulse.led_status import program_for_agent_mode
+
+    animation = settings.agent_animation(mode)
+    return program_for_agent_mode(
+        mode,
+        led_count=led_count,
+        brightness=settings.brightness_for_device(NOTCH_DEVICE_ID),
+        animation_style=animation.style,
+        custom_program=animation.custom_program,
+    )
+
+
+def frame_interval_for(mode: Any) -> float:
+    """Seconds between frames for a State: upstream's set_state runs Working and Ask at FRAME_RATE,
+    Idle at IDLE_FRAME_RATE. Done is a solid colour, so it only needs the slow rate to see a change."""
+    from sidepulse.led_status import LedDisplayState, display_state_for_mode
+
+    animated = display_state_for_mode(mode) in (LedDisplayState.WORKING, LedDisplayState.ASK)
+    return 1.0 / (FRAME_RATE if animated else IDLE_FRAME_RATE)
 
 
 # --- Sessions (D8): a session's process, window and the three-state lookup ----
@@ -1360,6 +1589,23 @@ class Helper:
         self.last_awake: dict[str, Any] | None = None
         self.power_root = POWER_SUPPLY_ROOT
         self.clock: Callable[[], float] = time.monotonic
+        # Bar LEDs (D6, D7). The settings and State as the last read saw them; the Bar LEDs' program text
+        # (None: nothing to draw); each device's program text as the last device scan read it.
+        self.settings: Any = None
+        self.state_readable = False
+        self.bar_leds_on = False
+        self.bar_program_text: str | None = None
+        self.bar_problem: str | None = None
+        self.bar: LedProgram | None = None
+        self.device_programs: dict[str, str | None] = {}
+        self.device_sources: dict[str, LedProgram] = {}
+        self.frame_interval = 1.0 / IDLE_FRAME_RATE
+        self.frame_problem: str | None = None
+        # The popup is open in some widget copy (set-popup, D5). Device frames flow only then.
+        self.popup_open = False
+        self.last_frames: dict[str, Any] = {}
+        self.next_tick = 0.0
+        self.next_frame = 0.0
 
     def emit(self, event: dict[str, Any]) -> None:
         self.out.write(json.dumps(event, separators=(",", ":")) + "\n")
@@ -1407,6 +1653,8 @@ class Helper:
         statuses: list[Any] = []
         settings = load_settings()
         self.refresh_settings(settings, force)
+        self.settings = settings
+        self.bar_leds_on = settings.virtual_status_device_enabled
         try:
             snapshot = read_snapshot(
                 self.latest_path,
@@ -1421,10 +1669,12 @@ class Helper:
             from sidepulse.models import AgentMode
 
             self.mode = AgentMode.BLOCKED_ERROR
+            self.state_readable = False
         else:
             self.resolve("state")
             event = state_event(snapshot)
             self.mode = snapshot.aggregate.mode
+            self.state_readable = True
             if self.capabilities["sessions"]["ok"]:
                 statuses = recent_statuses(snapshot, settings.recent_session_retention_seconds)
             self.note_asks(asking_sessions(snapshot.statuses))
@@ -1433,6 +1683,10 @@ class Helper:
             self.emit(event)
         self.session_statuses = statuses
         self.refresh_sessions(force)
+        # frame_interval_for reads upstream names the Bar LEDs probe checks: only with that capability on (D14).
+        animated = self.state_readable and self.capabilities.get("bar_leds", {}).get("ok") is True
+        self.frame_interval = frame_interval_for(self.mode) if animated else 1.0 / IDLE_FRAME_RATE
+        self.refresh_bar()
 
     def refresh_settings(self, settings: Any, force: bool = False) -> None:
         if not self.capabilities.get("settings", {}).get("ok"):
@@ -1523,6 +1777,15 @@ class Helper:
             # Cleared only by a pass that reached every device.
             if not failed:
                 self.resolve("devices")
+        # The program each device holds now, at full brightness: its LED frames play it (the popup's device rows, D21).
+        from sidepulse.settings import load_settings
+
+        settings = load_settings()
+        self.device_programs = {
+            device.id: full_brightness_program(shown_program(device), settings.brightness_for_device(device.id))
+            for device in self.devices
+        }
+        self.refresh_bar()
         event = self.devices_event()
         if force or event != self.last_devices:
             self.last_devices = event
@@ -1554,6 +1817,110 @@ class Helper:
         self.refresh_setup(force)
         self.refresh_hooks(force)
         self.refresh_log(force)
+
+    # --- Bar LEDs and device frames (D6, D7, D21) ---
+
+    def refresh_bar(self) -> None:
+        """The Bar LEDs' program for the current State and product (D6, D21). Nothing is drawn when the
+        switch is off, the State cannot be read, or the feature is unavailable (CODING_STANDARDS: shown
+        state follows its source)."""
+        if not self.capabilities.get("bar_leds", {}).get("ok"):
+            self.bar_program_text = None
+            return
+        count = bar_led_count(self.devices)
+        if self.bar is None or self.bar.led_count != count:
+            self.bar = LedProgram(count)
+        text = None
+        self.bar_problem = None
+        if self.bar_leds_on and self.state_readable and self.settings is not None:
+            from sidepulse.device_writer import DeviceWriteError
+
+            try:
+                text = bar_program(self.settings, self.mode, count)
+            except (DeviceWriteError, ValueError) as exc:  # e.g. an empty custom animation (upstream's check)
+                self.bar_problem = f"Bar LEDs: {exc}"
+        self.bar_program_text = text
+
+    def pump_frames(self, now: float) -> None:
+        """Step every LED program and send each frame whose colours changed (D6)."""
+        if not self.capabilities.get("bar_leds", {}).get("ok"):
+            return
+        ms = now * 1000.0
+        problems: list[str] = [self.bar_problem] if self.bar_problem else []
+        if self.bar is None or self.bar_program_text is None:
+            self.emit_frame("bar", None, target="bar")
+        else:
+            problem, leds = self.play(self.bar, self.bar_program_text, ms)
+            if problem:
+                problems.append(f"Bar LEDs: {problem}")
+            self.emit_frame("bar", leds, target="bar")
+        # Device frames are for the popup's rows (D21), sent only while it is open, and for the bar
+        # icon (D12), which is always on show: its device steps even with the popup closed, while it
+        # shows Agent. Each device steps once per frame, whoever reads it.
+        icon = icon_device(self.devices)
+        if icon is not None and display_of(self.displays or {}, icon.id) != "agent":
+            icon = None
+        icon_leds: list[list[int]] | None = None
+        for device in self.devices:
+            if not self.popup_open and device is not icon:
+                continue
+            source = self.device_sources.get(device.id)
+            if source is None or source.led_count != device.led_count:
+                source = self.device_sources[device.id] = LedProgram(device.led_count)
+            problem, leds = self.play(source, self.device_programs.get(device.id), ms)
+            if problem:
+                problems.append(f"{device.name}: {problem}")
+            if self.popup_open:
+                self.emit_frame(f"device:{device.id}", leds, target="device", device=device.id)
+            if device is icon:
+                icon_leds = leds
+        # A null is sent only to clear an icon that was lit; with no device ever, nothing is sent.
+        if icon_leds is not None or "icon" in self.last_frames:
+            self.emit_frame("icon", icon_leds, target="icon")
+        self.set_frame_problem("; ".join(problems) if problems else None)
+
+    def set_popup(self, command: dict[str, Any]) -> None:
+        """The popup opened or closed (the widget sends the OR of its copies, D5). On open, the device
+        rows get their frames at the next pump, so none is suppressed as unchanged."""
+        is_open = command.get("open")
+        if not isinstance(is_open, bool):
+            self.error("command", "set-popup needs open: true or false")
+            return
+        if is_open and not self.popup_open:
+            for device in self.devices:
+                self.last_frames.pop(f"device:{device.id}", None)
+            self.next_frame = self.clock()
+        self.popup_open = is_open
+
+    def play(self, source: LedProgram, text: str | None, ms: float) -> tuple[str | None, list[list[int]]]:
+        """One source's problem and LEDs now. An engine that raises is reported and its LEDs go dark; the
+        engine is rebuilt on the next frame, so a transient failure recovers (D14: fail loudly, keep running)."""
+        try:
+            problem = source.load(text, ms)
+            return problem, source.frame(ms)
+        except Exception as exc:  # the boundary to upstream's wasm engine, through wasmtime
+            source.engine, source.text, source.lit = None, None, False
+            return f"the engine failed: {type(exc).__name__}: {exc}", source.frame(ms)
+
+    def emit_frame(self, key: str, leds: list[list[int]] | None, *, target: str, device: str | None = None) -> None:
+        """Send a frame when its colours differ from the last one sent for this key."""
+        if key in self.last_frames and self.last_frames[key] == leds:
+            return
+        self.last_frames[key] = leds
+        event: dict[str, Any] = {"type": "frame", "target": target, "leds": leds}
+        if device is not None:
+            event["device"] = device
+        self.emit(event)
+
+    def set_frame_problem(self, message: str | None) -> None:
+        """A program that does not play is reported under PROBLEMS (D14); the report changes with the problem."""
+        if message == self.frame_problem:
+            return
+        self.frame_problem = message
+        if message is None:
+            self.emit({"type": "clear", "feature": "frames"})
+        else:
+            self.error("frames", message)
 
     # --- Keep awake (D11) ---
 
@@ -1827,6 +2194,8 @@ class Helper:
             self.set_bar_leds(command)
         elif name == "set-notify":
             self.set_notify(command)
+        elif name == "set-popup":
+            self.set_popup(command)
         elif name == "set-policy":
             self.set_policy(command)
         else:
@@ -1842,6 +2211,11 @@ class Helper:
             self.inhibitor.release()
 
     def loop(self, stdin_fd: int) -> None:
+        # Two deadlines: the one-second tick (state, awake, devices) and the frame (D6). A wake-up runs only
+        # the work whose deadline has passed, so 60 frames a second cost 60 pumps, not 60 full ticks.
+        now = self.clock()
+        self.next_tick = now + TICK_SECONDS
+        self.next_frame = now + self.frame_interval
         while True:
             fds = [stdin_fd]
             if self.watch is not None:
@@ -1855,7 +2229,8 @@ class Helper:
                     if self.watch.fd is not None:
                         fds.append(self.watch.fd)
             fds.extend(proc.stdout.fileno() for _, proc, _ in self.notifications)
-            ready, _, _ = select.select(fds, [], [], TICK_SECONDS)
+            timeout = max(0.0, min(self.next_tick, self.next_frame) - self.clock())
+            ready, _, _ = select.select(fds, [], [], timeout)
             if stdin_fd in ready:
                 chunk = os.read(stdin_fd, 65536)
                 if not chunk:
@@ -1868,14 +2243,20 @@ class Helper:
             self.pump_notifications()
             if self.watch is not None and self.watch.fd in ready and "latest.json" in self.watch.names():
                 self.refresh_state()
-            self.ticks += 1
-            self.refresh_state()  # re-run the rules so ages and staleness advance
-            self.refresh_awake()  # the grace runs out with the clock, not with a write
-            self.refresh_devices()
-            if self.ticks % SETUP_EVERY_TICKS == 0:
-                self.refresh_setup()
-                self.refresh_hooks()
-                self.refresh_log()
+            now = self.clock()
+            if now >= self.next_tick:
+                self.next_tick = now + TICK_SECONDS
+                self.ticks += 1
+                self.refresh_state()  # re-run the rules so ages and staleness advance
+                self.refresh_awake()  # the grace runs out with the clock, not with a write
+                self.refresh_devices()
+                if self.ticks % SETUP_EVERY_TICKS == 0:
+                    self.refresh_setup()
+                    self.refresh_hooks()
+                    self.refresh_log()
+            if now >= self.next_frame:
+                self.next_frame = now + self.frame_interval
+                self.pump_frames(now)
 
 
 def main() -> int:

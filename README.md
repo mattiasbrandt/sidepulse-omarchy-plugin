@@ -50,8 +50,12 @@ open); a session that has stopped resumes in a new terminal, in its folder. When
 SidePulse cannot tell which process runs a session, the popup says so and does
 nothing.
 
+Bar LEDs (in Settings) draw the agent State's LEDs along the inner edge of a
+top or bottom bar, on every monitor: 2 LEDs for a SidePulse Dot, 8 for a
+SidePulse Pro.
+
 Devices lists each connected SidePulse Dot or SidePulse Pro with its Display
-(Agent or Off) and brightness. Off is saved in SidePulse's own settings, so it
+(Agent or Off) and brightness; each device's LEDs show what its program plays. Off is saved in SidePulse's own settings, so it
 outlasts the plugin: set a device back to Agent before removing the plugin, or
 afterwards set its `led_display` back to `agent` in
 `~/.config/sidepulse/agent-monitor/settings.json`.
@@ -69,8 +73,16 @@ afterwards set its `led_display` back to `agent` in
   or `tmux`, when your agents run inside one.
 - `systemd-inhibit` (systemd, which Omarchy ships) for keep-awake (D11). Without
   it the Keep awake policy cannot hold sleep and the popup says why.
-- Later slices add their own requirements here: `wasmtime` in the SidePulse
-  venv for the Bar LEDs (#8).
+- `wasmtime` in the SidePulse venv, for the Bar LEDs and the device rows' LED
+  frames (D6). Pinned to the version the tests run against:
+
+  ```sh
+  ~/.local/share/sidepulse/venv/bin/python -m pip install wasmtime==49.0.0
+  ```
+
+  SidePulse's own README names no such step, so a `sidepulse update` may not
+  keep it. Without it the popup's PROBLEMS says the Bar LEDs are unavailable, and
+  the device rows show the program's colour without animation.
 
 ## Remove
 

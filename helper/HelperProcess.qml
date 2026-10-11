@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "lifecycle.mjs" as Lifecycle
+import "popup.mjs" as Popup
 
 // The one helper process for the whole shell (D5). Each widget copy registers
 // on creation and unregisters on destruction. When the process starts, stops
@@ -44,6 +45,19 @@ Item {
   property var settings: null
   // The keep-awake policy, whether the sleep lock is held and why (D11); null until the helper reports.
   property var awake: null
+  // The Bar LEDs' colours, [r, g, b] per LED, or null when nothing is drawn (D6, D7), and each
+  // device's colours by device id (the popup's device rows). Replaced on each frame that changed.
+  property var barLeds: null
+  // The bar icon's LEDs: its device's frames while that device shows Agent (D12), else null.
+  property var iconLeds: null
+  property var deviceLeds: ({})
+  // The Bar LEDs' copies that want the band, in the order they asked: the first per bar window holds it.
+  property var bandClaims: []
+  // The widget copies whose popup is open (popup.mjs). The helper gets their OR as set-popup, so device
+  // frames flow only while a popup shows the device rows. popupSent is what it last got; null until the
+  // current helper has said hello.
+  property var openPopups: []
+  property var popupSent: null
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -87,6 +101,10 @@ Item {
     hookLog = []
     settings = null
     awake = null
+    barLeds = null
+    iconLeds = null
+    deviceLeds = ({})
+    popupSent = null  // the next helper is told again
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -112,6 +130,46 @@ Item {
   // Keep awake (D11): never, agents (when agents work) or always; saved through upstream's settings.
   function setPolicy(policy) { send({ cmd: "set-policy", policy: policy }) }
 
+  // A Bar LEDs copy asks for the band of its bar window (`wants`), or drops its ask (`wants` false,
+  // on destruction). The first copy that asked for a window holds it; when it leaves, the next holds it.
+  function wantBand(owner, window, wants) {
+    const others = bandClaims.filter(function (claim) { return claim.owner !== owner })
+    bandClaims = wants && window ? others.concat([{ owner: owner, window: window }]) : others
+  }
+
+  // A widget copy's popup opened (isOpen) or closed, or the copy went away (false). Sends the OR on change.
+  function setPopupOpen(owner, isOpen) {
+    openPopups = Popup.withOpenPopup(openPopups, owner, isOpen)
+    sendPopup()
+  }
+
+  function sendPopup() {
+    const open = Popup.anyPopupOpen(openPopups)
+    if (!helloReceived || open === popupSent) return
+    popupSent = open
+    send({ cmd: "set-popup", open: open })
+  }
+
+  // The copy holding the band of this window, or null.
+  function bandHolder(window) {
+    for (let i = 0; i < bandClaims.length; i++) {
+      if (bandClaims[i].window === window) return bandClaims[i].owner
+    }
+    return null
+  }
+
+  function applyFrame(event) {
+    if (event.target === "bar") {
+      barLeds = event.leds
+    } else if (event.target === "icon") {
+      iconLeds = event.leds
+    } else if (event.target === "device") {
+      const next = Object.assign({}, deviceLeds)
+      next[event.device] = event.leds
+      deviceLeds = next
+    }
+  }
+
   function handleLine(line) {
     if (line.trim() === "") return
     let event = null
@@ -124,6 +182,8 @@ Item {
     if (event.type === "hello") {
       helloReceived = true
       capabilities = event.capabilities
+      popupSent = null  // a fresh helper starts closed: tell it what the popups are
+      sendPopup()
       apply(Lifecycle.hello(life))
     } else if (event.type === "state") {
       agentState = event
@@ -141,6 +201,8 @@ Item {
       settings = event
     } else if (event.type === "awake") {
       awake = event
+    } else if (event.type === "frame") {
+      applyFrame(event)
     } else if (event.type === "result") {
       lastResult = event
     } else if (event.type === "error") {

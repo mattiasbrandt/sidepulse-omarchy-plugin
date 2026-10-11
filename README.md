@@ -39,8 +39,9 @@ stopped service (Start service runs `sidepulse service start`), or a device.
 
 Click the SidePulse icon in the bar to open the popup. `j` and `k` (or the arrow
 keys) move the highlight, Enter runs the highlighted action, `r` refreshes, and
-Esc or a click outside closes it. Settings (#6) and keep-awake (#7) stay empty
-until their slices land. A keybind for the popup lands in #12.
+Esc or a click outside closes it. Settings opens on Enter or a click: agent
+hooks, Bar LEDs, the timeouts, the Ask notice, the Keep awake policy and the
+hook log. A keybind for the popup lands in #12.
 
 Sessions lists up to ten recent agent sessions, newest and most urgent first.
 Enter or a click on one jumps to it: a session that is running focuses its

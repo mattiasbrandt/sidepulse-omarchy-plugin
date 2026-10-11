@@ -52,11 +52,15 @@ Item {
 
   function unregister() {
     refs = Math.max(0, refs - 1)
-    if (refs === 0) stopTimer.restart()
+    if (refs === 0) {
+      // A restart still waiting out its backoff would outlive the last copy.
+      restartTimer.stop()
+      stopTimer.restart()
+    }
   }
 
   function ensureRunning() {
-    if (!proc.running) proc.running = true
+    if (refs > 0 && !proc.running) proc.running = true
   }
 
   // The helper ended. Registered copies mean it died on its own: restart after

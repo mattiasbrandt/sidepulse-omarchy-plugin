@@ -37,6 +37,7 @@ Item {
   property var agentState: null
   property var setupItems: []
   property var devices: []
+  property var sessions: []
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -74,6 +75,7 @@ Item {
     helloReceived = false
     agentState = null
     devices = []
+    sessions = []
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -87,6 +89,8 @@ Item {
   // The widget's full map of device id to display (Agent, Battery, Off; D9).
   function setDisplays(displays) { send({ cmd: "set-displays", displays: displays }) }
   function setBrightness(deviceId, percent) { send({ cmd: "set-brightness", device: deviceId, percent: percent }) }
+  // Focus, locate or resume one listed session (D8); the answer is a `result`.
+  function openSession(session) { send({ cmd: "open-session", provider: session.provider, session_id: session.session_id }) }
 
   function handleLine(line) {
     if (line.trim() === "") return
@@ -106,6 +110,8 @@ Item {
       setupItems = event.items
     } else if (event.type === "devices") {
       devices = event.items
+    } else if (event.type === "sessions") {
+      sessions = event.items
     } else if (event.type === "result") {
       lastResult = event
     } else if (event.type === "error") {

@@ -82,7 +82,7 @@ CI (`.github/workflows/ci.yml`) runs on every PR and on `main`:
 |---|---|
 | Plugin validation (Omarchy's own validator at the pinned Omarchy tag) | `omarchy plugin validate .` |
 | SidePulse naming (D24) | `python3 -I scripts/check_names.py` |
-| Python tests | `UV_PROJECT_ENVIRONMENT="$HOME/.cache/sidepulse-omarchy-plugin/venv" uv run --locked pytest spikes` |
+| Python tests | `UV_PROJECT_ENVIRONMENT="$HOME/.cache/sidepulse-omarchy-plugin/venv" uv run --locked pytest` |
 | qmllint against the Omarchy shell | `scripts/qmllint.sh` |
 | actionlint | `actionlint` |
 
@@ -94,6 +94,6 @@ The Python tests run in a uv environment defined by `pyproject.toml` and
 never touches the SidePulse venv under `~/.local/share/sidepulse`. The local
 command keeps the environment out of the repo: uv's venv holds symlinks, and
 `omarchy plugin validate` and the live-check rsync both walk the whole tree.
-CI runs `uv run --locked pytest spikes` on Python 3.10 (upstream's floor) and
+CI runs `uv run --locked pytest` (`tests/` and the spikes) on Python 3.10 (upstream's floor) and
 3.14 in a fresh checkout. Locally, add `--python 3.10` to check the floor; uv
 rebuilds the environment when the interpreter changes.

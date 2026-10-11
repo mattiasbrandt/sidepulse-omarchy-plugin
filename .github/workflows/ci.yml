@@ -84,7 +84,7 @@ jobs:
         # user's SidePulse venv. uv uses the interpreter set up above.
         env:
           PYTHON_VERSION: ${{ matrix.python }}
-        run: uv run --locked --python "$PYTHON_VERSION" pytest spikes -v
+        run: uv run --locked --python "$PYTHON_VERSION" pytest -v
 
   qmllint:
     name: qmllint

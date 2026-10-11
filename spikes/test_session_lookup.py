@@ -1,6 +1,6 @@
 """Tests for the D8 lookup states against a fake /proc tree.
 
-Run: uv run --locked pytest spikes (see CONTRIBUTING.md)
+Run: uv run --locked pytest (see CONTRIBUTING.md)
 """
 
 from __future__ import annotations

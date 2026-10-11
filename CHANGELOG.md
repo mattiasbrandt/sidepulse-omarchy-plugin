@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.3.0...v0.4.0) (2026-10-11)
+
+
+### Features
+
+* **widget:** list recent sessions and jump to them (D8, D13) ([#32](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/32)) ([bb97b3f](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/bb97b3fe15a3cce793e870865e2fcd78ed324d4b))
+
 ## [0.3.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.2.0...v0.3.0) (2026-10-11)
 
 

@@ -145,6 +145,22 @@ def test_unreadable_latest_json_lists_no_sessions(helper_proc):
     assert event == {"type": "sessions", "items": []}
 
 
+def test_open_session_for_an_unlisted_session_answers_with_a_failed_result(helper_proc):
+    helper_proc.event_matching(lambda e: e["type"] == "sessions")
+    helper_proc.send({"cmd": "open-session", "provider": "claude", "session_id": "not-listed"})
+    event = helper_proc.event_matching(lambda e: e["type"] == "result")
+    assert (event["command"], event["ok"]) == ("open-session", False)
+    assert "no longer listed" in event["message"]
+
+
+def test_open_session_without_a_session_id_is_reported_as_an_error_event(helper_proc):
+    helper_proc.event_matching(lambda e: e["type"] == "sessions")
+    helper_proc.send({"cmd": "open-session", "provider": "claude"})
+    event = helper_proc.event_matching(lambda e: e["type"] == "error")
+    assert event["feature"] == "command"
+    assert "session_id" in event["message"]
+
+
 def test_unknown_command_is_reported_as_an_error_event(helper_proc):
     helper_proc.event_matching(lambda e: e["type"] == "state")
     helper_proc.send({"cmd": "no-such-command"})

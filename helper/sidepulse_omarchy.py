@@ -741,6 +741,90 @@ def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None =
     return {**found, **live_route(provider, session_id, cwd, found["pid"], proc, home, window_clients, run)}
 
 
+# --- Open a session (D8): act on the lookup's plan ---------------------------
+
+Spawn = Callable[[list[str], str | None], None]
+
+
+def spawn_detached(argv: list[str], cwd: str | None) -> None:
+    """Starts a terminal (or any command) that outlives the helper. A failure to start raises CommandFailed."""
+    try:
+        subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        raise CommandFailed(f"{argv[0]} cannot start: {exc}") from exc
+
+
+def focus_window(address: str, title: str, run: Run) -> tuple[bool, str]:
+    """Raise a Hyprland window by address (spikes/#2: hyprctl exits 0 even when the address is gone)."""
+    if not HYPRLAND_ADDRESS.fullmatch(address):
+        return False, f"Not focusing {title}: {address!r} is not a window address"
+    done = run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'])
+    output = (done.stdout + done.stderr).strip()
+    if done.returncode != 0 or "window not found" in output:
+        return False, f"Could not focus {title}: {output or 'exit ' + str(done.returncode)}"
+    return True, f"Focused {title}."
+
+
+def _open_client(client: dict | None, attach: list[str], name: str, spawn: Spawn, run: Run) -> tuple[bool, str]:
+    """A multiplexer's client: raise its window, or start one attached when none runs."""
+    if client is None:
+        spawn(attach, None)
+        return True, f"Opened a terminal attached to {name}."
+    if client["action"] == "focus":
+        return focus_window(client["address"], client["title"], run)
+    return False, f"{name} is attached, but its window is not known: {describe_window(client)}."
+
+
+def describe_window(window: dict) -> str:
+    if window["action"] == "ambiguous-window":
+        return f"{window['candidates']} windows match"
+    return "no Hyprland window owns its process"
+
+
+def explain_message(plan: dict) -> str:
+    if plan.get("state") == "unresolved":
+        return f"Not resumed or focused: {plan['reason']}."
+    if plan["action"] == "ambiguous-window":
+        return f"{plan['candidates']} windows match this session; not guessing which to focus."
+    if plan["action"] == "ambiguous-pane":
+        return f"{len(plan['candidates'])} {plan['multiplexer']} panes hold this session; not guessing which to focus."
+    notes = "".join(f" {note}." for note in plan.get("notes", []))
+    return f"Running in {plan['where']}; no window or pane to focus.{notes}"
+
+
+def perform_open(plan: dict, status: Any, run: Run, spawn: Spawn) -> tuple[bool, str]:
+    """Carry out the plan from resolve(): resume (upstream's command, D8), focus or explain. Never both."""
+    action = plan["action"]
+    if action == "resume":
+        from sidepulse.session_actions import session_resume_command
+
+        command = session_resume_command(status)
+        if command is None:
+            return False, f"{status.display_name} has no session id to resume."
+        try:
+            spawn(["xdg-terminal-exec", "--", "sh", "-c", command], status.cwd)
+        except CommandFailed as exc:
+            return False, f"Could not resume {status.display_name}: {exc}"
+        return True, f"Resuming {status.display_name} in a terminal."
+    if action == "focus":
+        return focus_window(plan["address"], plan["title"], run)
+    if action == "herdr":
+        _checked(run(["herdr", "agent", "focus", plan["pane"]]), "herdr agent focus")
+        return _open_client(plan["client"], ["xdg-terminal-exec", "--", "herdr"], "herdr", spawn, run)
+    if action == "tmux":
+        _checked(run(["tmux", "select-window", "-t", plan["pane"]]), "tmux select-window")
+        _checked(run(["tmux", "select-pane", "-t", plan["pane"]]), "tmux select-pane")
+        attach = ["xdg-terminal-exec", "--", "tmux", "attach-session", "-t", plan["session"]]
+        return _open_client(plan["client"], attach, "tmux", spawn, run)
+    return False, explain_message(plan)
+
+
+def _checked(done: subprocess.CompletedProcess, what: str) -> None:
+    if done.returncode != 0:
+        raise CommandFailed(f"{what}: {(done.stderr or done.stdout).strip() or 'exit ' + str(done.returncode)}")
+
+
 # --- The popup's session list (D13): upstream's recent-session rules -----------
 
 # Upstream's STATUS_BAR_SESSION_HISTORY_LIMIT (status_bar.py). tests/test_sessions.py
@@ -1000,6 +1084,31 @@ class Helper:
             self.error("devices", f"{device.name}: {exc}")
         self.refresh_devices(force=True)
 
+    def open_session(self, command: dict[str, Any]) -> None:
+        """Answer with a `result`: the D8 lookup's outcome for one listed session (ok closes the popup)."""
+        provider = command.get("provider")
+        session_id = command.get("session_id")
+        if not isinstance(provider, str) or not isinstance(session_id, str):
+            self.error("command", "open-session needs a provider and a session_id")
+            return
+        if not self.capabilities.get("sessions", {}).get("ok"):
+            self.error("command", "open-session is unavailable: " + self.capabilities.get("sessions", {}).get("reason", ""))
+            return
+        status = next((s for s in self.session_statuses
+                       if s.provider.lower() == provider and s.session_id == session_id), None)
+        if status is None:
+            self.emit({"type": "result", "command": "open-session", "ok": False,
+                       "message": "That session is no longer listed; refresh the popup and try again."})
+            return
+        plan: dict[str, Any] = {"action": "explain"}
+        try:
+            plan = resolve(provider, session_id, status.cwd)
+            ok, message = perform_open(plan, status, run_command, spawn_detached)
+        except CommandFailed as exc:
+            ok, message = False, f"Could not open {status.display_name}: {exc}"
+        self.emit({"type": "result", "command": "open-session", "ok": ok, "action": plan["action"],
+                   "message": message})
+
     def handle_line(self, raw: bytes) -> None:
         try:
             command = json.loads(raw)
@@ -1017,6 +1126,8 @@ class Helper:
             self.set_displays(command)
         elif name == "set-brightness":
             self.set_brightness(command)
+        elif name == "open-session":
+            self.open_session(command)
         else:
             self.error("command", f"unknown command {name!r}")
 

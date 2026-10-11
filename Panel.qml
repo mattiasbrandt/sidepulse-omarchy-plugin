@@ -37,7 +37,7 @@ Panel {
   readonly property string tooltipText: {
     if (HelperProcess.notInstalled) return "SidePulse: not installed"
     if (!agentState) return "SidePulse: starting"
-    var text = "SidePulse: " + agentState.label
+    let text = "SidePulse: " + agentState.label
     if (agentState.active_count > 0) text += ", " + agentState.active_count + " active"
     if (agentState.top) text += ", " + agentState.top.display_name
     if (needsSetup) text += " (setup needed)"
@@ -52,9 +52,9 @@ Panel {
 
   // Problems the helper reported, one line each: capabilities that are off and failures.
   readonly property var problemLines: {
-    var lines = []
-    var keys = Object.keys(HelperProcess.errors)
-    for (var i = 0; i < keys.length; i++) lines.push(keys[i] + ": " + HelperProcess.errors[keys[i]])
+    const lines = []
+    const keys = Object.keys(HelperProcess.errors)
+    for (let i = 0; i < keys.length; i++) lines.push(keys[i] + ": " + HelperProcess.errors[keys[i]])
     // A helper that died before saying hello only leaves its last stderr line.
     if (!HelperProcess.helloReceived && !HelperProcess.notInstalled && HelperProcess.lastStderr !== "") {
       lines.push("helper: " + HelperProcess.lastStderr)
@@ -69,8 +69,8 @@ Panel {
   property bool cursorActive: false
 
   readonly property var cursorRows: {
-    var rows = []
-    for (var i = 0; i < setupRows.length; i++) {
+    const rows = []
+    for (let i = 0; i < setupRows.length; i++) {
       if (setupRows[i].action) rows.push("setup:" + setupRows[i].id)
     }
     return rows.concat(sectionRows)
@@ -91,7 +91,7 @@ Panel {
   }
 
   function focusRow(name) {
-    var at = cursorRows.indexOf(name)
+    const at = cursorRows.indexOf(name)
     if (at < 0) return
     cursorActive = true
     cursorIndex = at
@@ -102,10 +102,10 @@ Panel {
   }
 
   function activateCursor() {
-    var name = cursorRow
+    const name = cursorRow
     if (name.indexOf("setup:") !== 0) return
-    var id = name.substring(6)
-    for (var i = 0; i < setupRows.length; i++) {
+    const id = name.substring(6)
+    for (let i = 0; i < setupRows.length; i++) {
       if (setupRows[i].id === id) runSetupAction(setupRows[i])
     }
   }

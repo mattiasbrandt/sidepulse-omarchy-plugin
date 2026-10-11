@@ -80,7 +80,7 @@ Item {
 
   function handleLine(line) {
     if (line.trim() === "") return
-    var event = null
+    let event = null
     try {
       event = JSON.parse(line)
     } catch (e) {

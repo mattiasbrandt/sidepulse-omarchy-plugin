@@ -31,10 +31,27 @@ Panel {
   readonly property var setupRows: HelperProcess.notInstalled ? [installRow] : HelperProcess.setupItems
   readonly property bool needsSetup: setupRows.length > 0
 
-  // Idle is muted; the other three states use upstream's colours.
-  readonly property color glyphColour: !agentState || agentState.state === "idle" || agentState.state === "unavailable"
-    ? dim
-    : agentState.colour
+  // The colour a connected device's LEDs show now (a SidePulse Pro wins, D21);
+  // empty when none is lit. Upstream's device programs and its menu-bar legend
+  // differ (Done is cyan on the device, green in the legend), and the icon
+  // follows the device the user can see (D12).
+  readonly property string deviceColour: {
+    let found = ""
+    for (let i = 0; i < HelperProcess.devices.length; i++) {
+      const device = HelperProcess.devices[i]
+      if (!device.colour || displayOf(device.id) !== "agent") continue
+      if (device.kind === "pro") return device.colour
+      if (found === "") found = device.colour
+    }
+    return found
+  }
+
+  // Without a lit device: upstream's legend colours, Idle muted.
+  readonly property color glyphColour: deviceColour !== ""
+    ? deviceColour
+    : !agentState || agentState.state === "idle" || agentState.state === "unavailable"
+      ? dim
+      : agentState.colour
 
   readonly property string tooltipText: {
     if (HelperProcess.notInstalled) return "SidePulse: not installed"
@@ -382,13 +399,16 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            // Keyed on the count, not the list: each devices event replaces the
+            // list, and a list model would rebuild every row, ending a slider
+            // drag at its first step.
             Repeater {
-              model: HelperProcess.devices
+              model: HelperProcess.devices.length
 
               DeviceRow {
-                required property var modelData
+                required property int index
                 width: parent.width
-                device: modelData
+                device: HelperProcess.devices[index] || ({})
               }
             }
 
@@ -519,10 +539,10 @@ Panel {
 
     readonly property string rowName: "device:" + device.id
     readonly property string display: root.displayOf(device.id)
-    // Agent lights the LEDs in the agent state's colour (the animation frames come
-    // with the Bar LEDs, #8); Off leaves them dim.
-    readonly property color ledColour: display === "agent" && root.agentState !== null
-      ? root.agentState.colour
+    // The colour the device's own LEDs show now (the animation frames come with
+    // the Bar LEDs, #8); Off and dark programs leave them dim.
+    readonly property color ledColour: display === "agent" && device.colour
+      ? device.colour
       : root.dim
 
     hasCursor: root.rowHasCursor(rowName)

@@ -2002,15 +2002,17 @@ class Helper:
     def takeover_text(self, device: Device, display: str, settings: Any, now: float) -> str | None:
         """The program the helper drives a device with while it takes the LEDs (D9, D10), or None when the
         service drives it (Agent). Off is always dark. A lid animation wins, then the closed-lid hold, then
-        the Battery display, then the 7 s preview on an Agent device."""
-        from sidepulse.battery import program_for_battery
-        from sidepulse.led_status import apply_brightness, builtin_animation_program
+        the Battery display, then the 7 s preview on an Agent device. The battery and lid functions are
+        imported only where their capability put them in use, so a missing one turns off only its feature."""
+        from sidepulse.led_status import builtin_animation_program
 
         brightness = settings.brightness_for_device(device.id)
         dark = builtin_animation_program("off", device.led_count)
         if display == "off":
             return dark
         if self.lid_animation is not None and now < self.lid_animation[1]:
+            from sidepulse.led_status import apply_brightness
+
             return apply_brightness(self.lid_animation[0], brightness)
         if self.lid_led_hold(settings):
             return dark
@@ -2019,9 +2021,13 @@ class Helper:
             # An unreadable battery leaves the device dark; PROBLEMS says why (D14: never a stale value).
             if battery is None:
                 return dark
+            from sidepulse.battery import program_for_battery
+
             return program_for_battery(battery, led_count=device.led_count, brightness=brightness)
         if (self.battery_offered and battery is not None and battery.battery_present
                 and now < self.preview_until):
+            from sidepulse.battery import program_for_battery
+
             return program_for_battery(battery, led_count=device.led_count, brightness=brightness)
         return None
 

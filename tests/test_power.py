@@ -384,6 +384,22 @@ def test_a_lid_read_failure_is_reported_and_plays_nothing(world):
     assert upstream_value(world) == "agent"
 
 
+@pytest.mark.parametrize(("module", "name"), [("battery", "program_for_battery"), ("led_status", "apply_brightness")])
+def test_a_missing_battery_or_lid_function_leaves_agent_and_off_working(world, monkeypatch, module, name):
+    # Upstream version skew turns off only the feature that needs the function (D14), not the device reconcile.
+    monkeypatch.delattr(getattr(sidepulse, module), name)
+    world.h.capabilities = helper.probe_capabilities()
+    assert world.h.capabilities["devices"]["ok"] is True
+    write_battery(world.power, percent=50, status="Discharging", plugged=False)
+    set_display(world, "off")
+    world.h.tick()
+    assert shown(world) == off_program()
+    set_display(world, "agent")
+    world.h.tick()
+    assert upstream_value(world) == "agent"
+    assert not errors_for(world.out, "devices")
+
+
 def test_the_battery_display_shows_the_lid_closed_hold_too(world):
     write_battery(world.power, percent=50, status="Discharging", plugged=False)
     set_display(world, "battery")

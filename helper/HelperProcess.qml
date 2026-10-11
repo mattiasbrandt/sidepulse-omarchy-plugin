@@ -36,6 +36,7 @@ Item {
   property bool helloReceived: false
   property var agentState: null
   property var setupItems: []
+  property var devices: []
   property var errors: ({})
   property var lastResult: null
   property bool notInstalled: false
@@ -72,6 +73,7 @@ Item {
   function processEnded() {
     helloReceived = false
     agentState = null
+    devices = []
     errors = {}  // the next helper re-reports what still fails
     apply(Lifecycle.processEnded(life))
   }
@@ -82,6 +84,9 @@ Item {
 
   function refresh() { send({ cmd: "refresh" }) }
   function startService() { send({ cmd: "start-service" }) }
+  // The widget's full map of device id to display (Agent, Battery, Off; D9).
+  function setDisplays(displays) { send({ cmd: "set-displays", displays: displays }) }
+  function setBrightness(deviceId, percent) { send({ cmd: "set-brightness", device: deviceId, percent: percent }) }
 
   function handleLine(line) {
     if (line.trim() === "") return
@@ -99,6 +104,8 @@ Item {
       agentState = event
     } else if (event.type === "setup") {
       setupItems = event.items
+    } else if (event.type === "devices") {
+      devices = event.items
     } else if (event.type === "result") {
       lastResult = event
     } else if (event.type === "error") {

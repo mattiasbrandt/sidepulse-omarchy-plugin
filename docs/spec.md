@@ -112,6 +112,9 @@ _Filled in during grilling, one entry per answered question._
     running until `omarchy restart shell`). Keep the singleton a thin process
     owner and line dispatcher; logic lives in the helper and in ordinary
     components. Note in AGENTS.md's live-check step.
+  - *Amended in #10:* the singleton lives in `helper/` and Panel.qml imports it with
+    `import "helper"`. A qmldir in the plugin root, imported with `import "."`,
+    made the widget extend itself (Panel.qml is also the base type's name).
   - `bar` is still null in a widget's `Component.onCompleted` (injected after).
 - **D6 Bar LEDs engine:** the helper runs upstream's `sdled.wasm` via the
   `wasmtime` Python package (49.0.0, `py3-none-manylinux1_x86_64` wheel,
@@ -288,13 +291,14 @@ _Filled in during grilling, one entry per answered question._
 ```
 sidepulse-omarchy-plugin/                    (repo root = plugin root)
 ├── manifest.json        id io.github.mattiasbrandt.sidepulse, kinds [bar-widget]
-├── qmldir               declares the singleton below
-├── HelperProcess.qml    pragma Singleton: owns the one helper Process, refcounts
-│                        widget copies (stop at 0, debounced), parses NDJSON (D5)
-├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup + IpcHandler
+├── Panel.qml            root Panel: BarIconButton + KeyboardPanel popup
 ├── BarLeds.qml          Bar LEDs, reparented into the bar window (D7, D21)
 ├── *.qml / Model.js     popup sections: Sessions, Devices, KeepAwake, Settings, HookLog
 ├── helper/
+│   ├── qmldir           declares the singleton below (*amended in #10*: imported
+│   │                    as "helper", not from the root: see the note under D5)
+│   ├── HelperProcess.qml  pragma Singleton: owns the one helper Process, refcounts
+│   │                    widget copies (stop at 0, debounced), parses NDJSON (D5)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper
 ├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8

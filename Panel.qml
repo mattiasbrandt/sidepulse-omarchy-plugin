@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
+import "helper"
 
 // SidePulse bar widget. The helper (HelperProcess, shared by every copy of
 // this widget) reports the agents' state, which colours the icon (D12). The

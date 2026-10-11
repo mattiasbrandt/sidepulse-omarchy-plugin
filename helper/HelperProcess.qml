@@ -10,8 +10,8 @@ import Quickshell.Io
 // so a plugin reload (down to zero and back) keeps the same process.
 //
 // This file owns the process, parses the NDJSON lines and exposes the latest
-// event of each kind. Logic lives in helper/sidepulse_omarchy.py. Edits here do
-// not hot-reload: `omarchy restart shell` picks them up.
+// event of each kind. Logic lives in sidepulse_omarchy.py beside it. Edits here
+// do not hot-reload: `omarchy restart shell` picks them up.
 Item {
   id: root
 
@@ -29,7 +29,7 @@ Item {
     ? pythonPath
     : Quickshell.env("HOME") + "/.local/share/sidepulse/venv/bin/python"
   readonly property string helperPath: decodeURIComponent(
-    Qt.resolvedUrl("helper/sidepulse_omarchy.py").toString().replace("file://", ""))
+    Qt.resolvedUrl("sidepulse_omarchy.py").toString().replace("file://", ""))
 
   property int refs: 0
   property int backoffMs: restartMinMs

@@ -1472,7 +1472,10 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
         return BatterySnapshot(battery_present=False, is_plugged=plugged)
     battery = batteries[0]
     status = _sysfs(battery / "status")
-    charging = status == "Charging"
+    # An online charger wins over a status that still says Discharging: some firmware (a ThinkPad in #9's
+    # laptop pass) turns status to Charging about 5 s after the adapter goes online. "Not charging" (a charge
+    # limit) and "Full" keep their own look.
+    charging = status == "Charging" or (plugged and status == "Discharging")
     full = status == "Full"
     # Linux has no adapter wattage: while charging, the battery's intake (power_now, microwatts) stands in
     # for it, which is what upstream's charge speed (the charging program's pulse) reads.

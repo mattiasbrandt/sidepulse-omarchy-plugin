@@ -306,6 +306,12 @@ _Filled in during grilling, one entry per answered question._
   battery, as D11. Linux has no adapter wattage, so while charging `power_now` stands
   in for it (it sets upstream's charging pulse speed). Not checked on hardware: the
   laptop checklist for #9.
+  *Amended in #9 (laptop pass):* an online charger wins over a battery `status`
+  that still says `Discharging`: on a ThinkPad, `status` turns `Charging` about 5 s
+  after the adapter goes online, so the 7 s preview showed the unplugged look for
+  most of its time. `Not charging` (a charge limit) and `Full` keep their own look.
+  Until `power_now` reports the intake (0 W), the pulse is upstream's 180 ms one, as
+  `charging_pulse_length_ms(0)` gives; it changes once the wattage arrives.
 - **D11 Keep-awake scope (Mac parity):** helper holds
   `systemd-inhibit --what=sleep:handle-lid-switch` while upstream's predicate
   says hold (Working/Tool Running/Long Task, 300 s grace after

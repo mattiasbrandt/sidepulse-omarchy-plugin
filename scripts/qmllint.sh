@@ -30,11 +30,11 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 ln -s "$(realpath "$shell_dir")" "$root/qs"
 
-# Every linted file's directory is also an import path, so the qmldir beside a
-# singleton is read: qmllint does not look there by itself in every version.
-mapfile -t dirs < <(printf '%s\n' "${files[@]}" | xargs -r -n1 dirname | sort -u)
-includes=()
-for dir in "${dirs[@]}"; do includes+=(-I "$dir"); done
+# qmllint reads only the qmldir of the current directory by default, so the
+# qmldir beside a singleton (helper/qmldir) is passed explicitly with -i.
+mapfile -t qmldirs < <(git ls-files -- '*qmldir')
+qmldir_args=()
+for qmldir in "${qmldirs[@]}"; do qmldir_args+=(-i "$qmldir"); done
 
-"$qmllint" --max-warnings 0 -I "$root" "${includes[@]}" "${files[@]}"
+"$qmllint" --max-warnings 0 -I "$root" ${qmldir_args[@]+"${qmldir_args[@]}"} "${files[@]}"
 echo "qmllint.sh: ${#files[@]} file(s) clean"

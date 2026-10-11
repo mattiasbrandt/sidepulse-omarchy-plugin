@@ -78,6 +78,19 @@ Omarchy installs plugins as a git checkout of the default branch
 (`omarchy plugin add` / `update`), so a release is a named, documented point on
 `main`, not a separate artifact.
 
+### Release checklist
+
+1. Merge the release-please PR and check that the `v*` tag and the GitHub Release exist.
+2. File a verify-plugin request on the marketplace's
+   [Plugin verification form](https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=verify-plugin.yml),
+   choosing **Verify and publish a newer upstream commit**, with the plugin id
+   `io.github.mattiasbrandt.sidepulse`, this repository's URL and the full SHA
+   of the release commit. Every new commit shows as **Update unverified** until
+   this request is published; the marketplace's `VERIFICATION.md` describes the states.
+3. Check that the README's tested versions (Omarchy, SidePulse commit, `wasmtime`) still
+   match the Omarchy tag pinned in `.github/workflows/ci.yml` and the SidePulse commit
+   pinned in `pyproject.toml`.
+
 ## Checks
 
 CI (`.github/workflows/ci.yml`) runs on every PR and on `main`:
@@ -103,6 +116,6 @@ The Python tests run in a uv environment defined by `pyproject.toml` and
 never touches the SidePulse venv under `~/.local/share/sidepulse`. The local
 command keeps the environment out of the repo: uv's venv holds symlinks, and
 `omarchy plugin validate` and the live-check rsync both walk the whole tree.
-CI runs `uv run --locked pytest` (`tests/` and the spikes) on Python 3.10 (upstream's floor) and
+CI runs `uv run --locked pytest` (`tests/`) on Python 3.10 (upstream's floor) and
 3.14 in a fresh checkout. Locally, add `--python 3.10` to check the floor; uv
 rebuilds the environment when the interpreter changes.

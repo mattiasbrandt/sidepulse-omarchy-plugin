@@ -9,6 +9,8 @@ agents' State in the bar (Working, Ask, Done or Idle), lights a SidePulse Dot or
 SidePulse Pro to match, and holds the settings in a popup, the way the macOS
 SidePulse menu-bar app does.
 
+![The SidePulse popup: sessions, the SidePulse Dot, Settings with Keep awake and the hook log, and the bar icon's tooltip](preview.png)
+
 > **Status:** early release. Tested on Omarchy 4.0.4 with a SidePulse Dot.
 > **SidePulse Pro is untested on hardware.** If you have one, please report what
 > works.

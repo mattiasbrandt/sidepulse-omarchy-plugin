@@ -83,8 +83,8 @@ _Filled in during grilling, one entry per answered question._
     it). The service writes `latest.json` (tmp + rename) within the same second
     as the hook line. Watch the **directory** for `MOVED_TO latest.json`, and
     re-run the rules on a timer so ages and staleness advance between writes.
-    Probe: was `spikes/state_reader.py`; since #10 its code is the helper's state
-    path in `helper/sidepulse_omarchy.py`.
+    Probe: was `spikes/state_reader.py` (`spikes/` removed in #12); since #10 its
+    code is the helper's state path in `helper/sidepulse_omarchy.py`.
   - *Amended in #10:* the four-state mapping and its colours (`state_for_mode`
     and the Ask/Working/Done/Idle legend, `status_bar.py` at 6d55225) are copied
     into the helper, because that module needs PyObjC and cannot be imported on
@@ -132,22 +132,24 @@ _Filled in during grilling, one entry per answered question._
 - **D6 Bar LEDs engine:** the helper runs upstream's `sdled.wasm` via the
   `wasmtime` Python package (49.0.0, `py3-none-manylinux1_x86_64` wheel,
   verified downloadable for the venv's Python 3.14).
-  *Spike #2 (wasm parity):* `spikes/wasm/sdled_wasmtime.py` (a line-for-line
+  *Spike #2 (wasm parity; the spike's files were removed in #12):* `spikes/wasm/sdled_wasmtime.py` (a line-for-line
   port of upstream `led_wasm.py`'s call sequence) and an independent Deno
   driver give byte-identical frames in 117/117 cases (off, all agent modes,
   26 built-in animations, battery programs, 8 invalid programs; 2 and 8
   LEDs; t = 0…2500 ms), and match upstream's own test vectors
   (`tests/test_sidepulse.py`). Both drive the same wasm, so this proves the
   port, not engine-vs-device; upstream's vectors are the engine reference.
-  Cost 0.017 ms/frame (60 fps budget 16.7 ms), 4 ms to instantiate. Re-run:
-  `spikes/wasm/compare.py`. README requirement:
+  Cost 0.017 ms/frame (60 fps budget 16.7 ms), 4 ms to instantiate. Re-run
+  (*amended in #12*: `spikes/wasm/` was removed; its Python reference cases are
+  `tests/bar_leds_reference.py`, checked by `tests/test_bar_leds.py`, and the Deno
+  driver is no longer kept). README requirement:
   `~/.local/share/sidepulse/venv/bin/pip install wasmtime`. Survives
   `sidepulse update` (it force-reinstalls only the `sidepulse` wheel set).
   If wasmtime is missing, the helper reports a capability error and the
   Bar LEDs are unavailable; they do not silently fall back.
   *Amended in #8:* the engine is `SdLedWasm` in `helper/sidepulse_omarchy.py`
-  (the port of the spike, not a copy kept under `spikes/`); `spikes/wasm/compare.py`
-  imports that class, so the reference check runs the shipped code. The resource
+  (the port of the spike, not a copy kept under `spikes/`); the reference check
+  (`tests/bar_leds_reference.py`, since #12) imports that class, so it runs the shipped code. The resource
   is read with upstream's `load_packaged_wasm` (importlib.resources), and the
   probe checks wasmtime and the resource together. Error names are upstream's
   `ERROR_NAMES`. The frame rate is upstream's: `FRAME_RATE` 60 for Working and
@@ -197,7 +199,7 @@ _Filled in during grilling, one entry per answered question._
   when no process can own it; otherwise explain where it may be running. No per-provider
   "Open with..." chooser / VS Code opener in v1.
   *Spike #2 (session → process → window), `spikes/session_lookup.py`,
-  tests `spikes/test_session_lookup.py`:*
+  tests `spikes/test_session_lookup.py` (both removed; now `tests/test_session_lookup.py`):*
   - Every lookup ends in one of three states. **stopped**: no process can own
     the session → resume. **live**: a process provably owns it → focus its
     window, or say where it runs. **unresolved**: a process might own it but
@@ -514,7 +516,6 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   ├── ipc.mjs          which widget copy owns the IPC target (*added in #38*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
-├── spikes/              #2 probes; their code moves into helper/ in #10, #4, #8
 ├── README.md  LICENSE (MIT)  preview.png  docs/spec.md
 ```
 

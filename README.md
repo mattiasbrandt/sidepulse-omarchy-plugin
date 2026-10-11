@@ -40,8 +40,14 @@ stopped service (Start service runs `sidepulse service start`), or a device.
 Click the SidePulse icon in the bar to open the popup. `j` and `k` (or the arrow
 keys) move the highlight, Enter runs the highlighted action, `r` refreshes, and
 Esc or a click outside closes it. The sections are empty until their slices
-land: sessions (#4), devices (#5), settings (#6) and keep-awake (#7). A keybind
-for the popup lands in #12.
+land: sessions (#4), settings (#6) and keep-awake (#7). A keybind for the popup
+lands in #12.
+
+Devices lists each connected SidePulse Dot or SidePulse Pro with its Display
+(Agent or Off) and brightness. Off is saved in SidePulse's own settings, so it
+outlasts the plugin: set a device back to Agent before removing the plugin, or
+afterwards set its `led_display` back to `agent` in
+`~/.config/sidepulse/agent-monitor/settings.json`.
 
 ## Requirements
 

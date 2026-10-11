@@ -218,7 +218,12 @@ _Filled in during grilling, one entry per answered question._
   tick. Off writes upstream's `off` program once per helper, not on every tick.
   Battery is not offered until #11 builds it, and then only on a machine with
   a battery; a remembered value the helper does not offer (such as `battery`
-  without one) means Agent. Brightness goes
+  without one) means Agent. Off is the user's saved choice, not a takeover: it
+  stays when the plugin is disabled or the helper exits (README says how to
+  undo it). While a device is Off the helper checks it every tick and writes
+  the off program again whenever the device shows anything else, because the
+  service can write an agent program it planned before reading `custom`
+  (`service.sync_outputs` reads settings, then writes). Brightness goes
   through upstream's `with_device_brightness` (0-255; the widget sends percent).
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery

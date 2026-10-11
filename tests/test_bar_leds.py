@@ -356,6 +356,87 @@ def test_missing_wasmtime_sends_no_frames_and_names_the_capability(scratch, monk
     assert h.capabilities["bar_leds"]["ok"] is False
 
 
+def popup_command(helper_obj: helper.Helper, open_: object) -> None:
+    helper_obj.handle_line(json.dumps({"cmd": "set-popup", "open": open_}).encode())
+
+
+def mount_dot(scratch: Path) -> Path:
+    mount = scratch / "media" / "PulseDot"
+    mount.mkdir(parents=True, exist_ok=True)
+    (mount / "LEDS.LED").write_text("#00E5FF\nrepeat\n")
+    return mount
+
+
+def test_no_device_frames_while_the_popup_is_closed(scratch):
+    """Device frames are for the popup's rows only (#8 review): none flow while it is closed."""
+    mount_dot(scratch)
+    write_latest(scratch, "working")
+    write_settings(scratch, True)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    out.seek(0)
+    out.truncate()
+    for step in range(5):
+        h.pump_frames(1.0 + step / 60)
+    assert [e for e in frame_events(out) if e["target"] == "device"] == []
+    assert [e for e in frame_events(out) if e["target"] == "bar"], "the bar frames are unaffected"
+
+
+def test_opening_the_popup_sends_the_device_frames_at_once(scratch):
+    mount = mount_dot(scratch)
+    write_latest(scratch, "idle_ready")
+    write_settings(scratch, False)
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    h.pump_frames(1.0)
+    out.seek(0)
+    out.truncate()
+    popup_command(h, True)
+    h.pump_frames(1.1)
+    device = [e for e in frame_events(out) if e["target"] == "device"]
+    assert len(device) == 1, "the current frames are sent, not suppressed as unchanged"
+    assert device[0]["device"] == str(mount)
+    assert len(device[0]["leds"]) == 2
+
+
+def test_closing_the_popup_stops_device_frames_and_the_engines_step_no_more(scratch, monkeypatch):
+    mount_dot(scratch)
+    write_latest(scratch, "working")
+    write_settings(scratch, False)  # no bar frames, so every step counted is a device's
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    steps = {"n": 0}
+    real_step = helper.SdLedWasm.step
+
+    def counting_step(self, now_ms):
+        steps["n"] += 1
+        return real_step(self, now_ms)
+
+    monkeypatch.setattr(helper.SdLedWasm, "step", counting_step)
+    popup_command(h, True)
+    h.pump_frames(1.0)
+    assert steps["n"] == 1
+    popup_command(h, False)
+    out.seek(0)
+    out.truncate()
+    steps["n"] = 0
+    h.pump_frames(1.1)
+    h.pump_frames(1.2)
+    assert steps["n"] == 0, "a closed popup steps no device engine"
+    assert [e for e in frame_events(out) if e["target"] == "device"] == []
+
+
+def test_set_popup_needs_a_boolean(scratch):
+    out = io.StringIO()
+    h = make_helper(scratch, out)
+    out.seek(0)
+    out.truncate()
+    popup_command(h, "yes")
+    errors = [json.loads(line) for line in out.getvalue().splitlines() if json.loads(line)["type"] == "error"]
+    assert errors and errors[0]["feature"] == "command"
+    assert "set-popup needs open" in errors[0]["message"], errors
+
+
 def test_devices_get_their_own_live_frames(scratch):
     """The popup's device rows show the frames of the program the device holds (D21, #5 review)."""
     mount = scratch / "media" / "PulseDot"
@@ -367,6 +448,7 @@ def test_devices_get_their_own_live_frames(scratch):
     h = make_helper(scratch, out)
     out.seek(0)
     out.truncate()
+    popup_command(h, True)  # the widget opens its popup: the rows' frames flow
     h.pump_frames(1.0)
     device = [e for e in frame_events(out) if e["target"] == "device"]
     assert len(device) == 1
@@ -383,6 +465,7 @@ def test_a_program_that_does_not_parse_is_reported_not_drawn(scratch):
     write_settings(scratch, False)
     out = io.StringIO()
     h = make_helper(scratch, out)
+    popup_command(h, True)
     h.pump_frames(1.0)
     errors = [json.loads(line) for line in out.getvalue().splitlines() if '"type":"error"' in line]
     assert any(e["feature"] == "frames" and "syntax" in e["message"] for e in errors), errors

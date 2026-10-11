@@ -33,7 +33,8 @@ remembered map; the helper reconciles every connected device to it, D9), and
 {"cmd": "set-brightness", "device": id, "percent": 0-100},
 {"cmd": "hooks-install" | "hooks-uninstall", "provider": name} (D13),
 {"cmd": "set-agent-list", "idle_timeout_seconds"?, "recent_session_retention_seconds"?},
-{"cmd": "set-bar-leds", "enabled": bool} and {"cmd": "set-notify", "enabled": bool} (D20).
+{"cmd": "set-bar-leds", "enabled": bool} and {"cmd": "set-notify", "enabled": bool} (D20),
+{"cmd": "set-popup", "open": bool}: whether a popup is open; device frames flow only while it is.
 
 It never binds events.sock: that socket belongs to upstream's service (D4).
 """
@@ -1570,6 +1571,8 @@ class Helper:
         self.device_sources: dict[str, LedProgram] = {}
         self.frame_interval = 1.0 / IDLE_FRAME_RATE
         self.frame_problem: str | None = None
+        # The popup is open in some widget copy (set-popup, D5). Device frames flow only then.
+        self.popup_open = False
         self.last_frames: dict[str, Any] = {}
         self.next_tick = 0.0
         self.next_frame = 0.0
@@ -1813,7 +1816,8 @@ class Helper:
             if problem:
                 problems.append(f"Bar LEDs: {problem}")
             self.emit_frame("bar", leds)
-        for device in self.devices:
+        # Device frames are for the popup's rows (D21): none are stepped or sent while it is closed.
+        for device in self.devices if self.popup_open else []:
             source = self.device_sources.get(device.id)
             if source is None or source.led_count != device.led_count:
                 source = self.device_sources[device.id] = LedProgram(device.led_count)
@@ -1822,6 +1826,19 @@ class Helper:
                 problems.append(f"{device.name}: {problem}")
             self.emit_frame(f"device:{device.id}", leds, device=device.id)
         self.set_frame_problem("; ".join(problems) if problems else None)
+
+    def set_popup(self, command: dict[str, Any]) -> None:
+        """The popup opened or closed (the widget sends the OR of its copies, D5). On open, the device
+        rows get their frames at the next pump, so none is suppressed as unchanged."""
+        is_open = command.get("open")
+        if not isinstance(is_open, bool):
+            self.error("command", "set-popup needs open: true or false")
+            return
+        if is_open and not self.popup_open:
+            for device in self.devices:
+                self.last_frames.pop(f"device:{device.id}", None)
+            self.next_frame = self.clock()
+        self.popup_open = is_open
 
     def play(self, source: LedProgram, text: str | None, ms: float) -> tuple[str | None, list[list[int]]]:
         """One source's problem and LEDs now. An engine that raises is reported and its LEDs go dark; the
@@ -2125,6 +2142,8 @@ class Helper:
             self.set_bar_leds(command)
         elif name == "set-notify":
             self.set_notify(command)
+        elif name == "set-popup":
+            self.set_popup(command)
         elif name == "set-policy":
             self.set_policy(command)
         else:

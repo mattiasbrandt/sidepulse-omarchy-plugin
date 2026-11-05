@@ -91,6 +91,11 @@ _Filled in during grilling, one entry per answered question._
     Linux. `tests/test_state.py` reads the upstream source and fails when the
     mapping, the state labels or the colours drift. Everything else calls
     upstream's rules.
+  - *Amended in #52:* code copied or ported from upstream keeps upstream's MIT
+    notice (`Copyright (c) 2026 Peter Kuhar`): in `LICENSE`, in
+    `THIRD_PARTY_NOTICES.md`, which lists each piece, and in the file holding it.
+    The marketplace review (omacom/omarchy-plugin-marketplace#11078) found the
+    notice missing from the copies made under #10 and #11.
   - Linux gaps (battery reader, keep-awake/lid, Bar LED frames) live in a small
     Python helper in the plugin repo that imports upstream's own code from
     the SidePulse venv (aggregate rules, settings load/save, keep-awake
@@ -497,6 +502,11 @@ _Filled in during grilling, one entry per answered question._
   LEDs**, the Omarchy counterpart of upstream's SidePulse Notch.
   Vocabulary: [`GLOSSARY.md`](../GLOSSARY.md).
 
+- **D25 Unofficial hobby project (#52):** the plugin is a personal contribution
+  to the Omarchy community, not made by, affiliated with or endorsed by the
+  SidePulse project. The README's opening and the manifest description say so, and
+  the README credits Peter Kuhar and the SidePulse contributors.
+
 ## Spec
 
 ### Components
@@ -522,7 +532,7 @@ sidepulse-omarchy-plugin/                    (repo root = plugin root)
 │   ├── ipc.mjs          which widget copy owns the IPC target (*added in #38*)
 │   └── sidepulse_omarchy.py   runs under SidePulse's venv python
 ├── tests/               pytest for the helper; node --test for *.mjs
-├── README.md  LICENSE (MIT)  preview.png  docs/spec.md
+├── README.md  LICENSE (MIT)  THIRD_PARTY_NOTICES.md  preview.png  docs/spec.md
 ```
 
 ### Helper (`helper/sidepulse_omarchy.py`)

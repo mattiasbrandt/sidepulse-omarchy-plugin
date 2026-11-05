@@ -9,6 +9,15 @@ agents' State in the bar (Working, Ask, Done or Idle), lights a SidePulse Dot or
 SidePulse Pro to match, and holds the settings in a popup, the way the macOS
 SidePulse menu-bar app does.
 
+> **Unofficial hobby project.** This plugin is a personal contribution to the
+> Omarchy community. It is not made by, affiliated with or endorsed by the SidePulse
+> project. [SidePulse](https://sidepulse.io) and its
+> [software](https://github.com/inteliwear/sidepulse) are the work of Peter Kuhar
+> and the SidePulse contributors, and all credit for the product goes to them.
+> Please report problems with this plugin
+> [here](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues), not to
+> the SidePulse project.
+
 ![The SidePulse popup: sessions, the SidePulse Dot, Settings with Keep awake and the hook log, and the bar icon's tooltip](preview.png)
 
 > **Status:** early release. Tested on Omarchy 4.0.4 with a SidePulse Dot.
@@ -286,9 +295,19 @@ What it touches at run time:
   `/tmp`, runs `omarchy plugin` and `omarchy restart shell`, and checks
   `systemctl --user is-active sidepulse.service`.
 
+## Credits
+
+This plugin exists because of [SidePulse](https://sidepulse.io), its devices and
+its [open-source software](https://github.com/inteliwear/sidepulse), by Peter Kuhar
+and the SidePulse contributors. The plugin does its work by running their code
+from your SidePulse install. The SidePulse name and product belong to their owners.
+
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Parts of the plugin are copied or ported from
+SidePulse, which is MIT licensed, `Copyright (c) 2026 Peter Kuhar`.
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists them and keeps SidePulse's
+license notice.
 
 ## Development
 

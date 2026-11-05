@@ -42,6 +42,11 @@ either changes or names the decision it departs from.
   hooks or sudo: every requirement is a documented prerequisite in the
   README's Requirements section, and every file or system state the plugin
   touches is listed in its Security section.
+- **Upstream's code keeps upstream's notice (D4).** Code copied or ported from
+  SidePulse is marked where it stands, listed in `THIRD_PARTY_NOTICES.md`, and sits
+  in a file that carries upstream's copyright and MIT notice.
+- **Unofficial, and says so (D25).** Nothing the plugin publishes suggests that
+  the SidePulse project made or endorses it.
 
 ## Language
 

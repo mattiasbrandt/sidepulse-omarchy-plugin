@@ -41,6 +41,29 @@ remembered map; the helper reconciles every connected device to it, D9), and
 It never binds events.sock: that socket belongs to upstream's service (D4).
 """
 
+# Portions of this file come from SidePulse (https://github.com/inteliwear/sidepulse):
+# the functions and tables marked below as copied or ported from upstream. See THIRD_PARTY_NOTICES.md.
+#
+# Copyright (c) 2026 Peter Kuhar
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 from __future__ import annotations
 
 import ctypes
@@ -744,7 +767,7 @@ def _i32(value: int) -> int:
 
 
 def _engine_input(text: str) -> tuple[bytes, int]:
-    """The UTF-16 code units of `text` written the way upstream's writeInput() writes them: returns (buffer, length)."""
+    """Ported from upstream's writeInput() (led_wasm.py): the UTF-16 code units of `text`; returns (buffer, length)."""
     data = str(text).encode("utf-16-le", "surrogatepass")
     units = [data[i] | (data[i + 1] << 8) for i in range(0, len(data), 2)]
     buffer = bytearray(INPUT_SIZE)
@@ -1347,6 +1370,7 @@ def _checked(done: subprocess.CompletedProcess, what: str) -> None:
 SESSION_LIMIT = 10
 
 
+# Copied from upstream status_bar.py (PyObjC, not importable here).
 def menu_status_sort_key(status: Any) -> tuple[int, int, float]:
     subagent_penalty = 1 if ":agent:" in status.agent_id else 0
     return (status.priority, subagent_penalty, -status.updated_at.timestamp())

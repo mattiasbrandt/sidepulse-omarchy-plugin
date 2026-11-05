@@ -1,5 +1,6 @@
 {
  "source": "upstream sidepulse virtual_device.py: blended_led_color_at_x, tone_mapped_led_color",
+ "copyright": "Copyright (c) 2026 Peter Kuhar, MIT License; see THIRD_PARTY_NOTICES.md",
  "colours": [
   [
    0.0,

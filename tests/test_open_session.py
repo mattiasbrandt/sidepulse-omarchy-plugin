@@ -183,10 +183,10 @@ def test_tmux_pane_is_selected_and_its_client_attached_when_none_runs():
         "tmux select-pane -t %3": (0, "", ""),
     })
     spawn = FakeSpawn()
-    ok, _ = helper.perform_open({"action": "tmux", "pane": "%3", "session": "work", "client": None}, status(),
+    ok, _ = helper.perform_open({"action": "tmux", "pane": "%3", "session": "$2", "client": None}, status(),
                                 run, spawn)
     assert ok is True
-    assert spawn.started == [(["xdg-terminal-exec", "--", "tmux", "attach-session", "-t", "work"], None)]
+    assert spawn.started == [(["xdg-terminal-exec", "--", "tmux", "attach-session", "-t", "$2"], None)]
 
 
 def test_explain_runs_nothing_and_says_where_the_session_runs():

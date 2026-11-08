@@ -1157,8 +1157,11 @@ def herdr_client_pids(proc: Proc) -> list[int]:
 
 
 def tmux_panes_holding(chain: list[int], run: Run) -> list[tuple[str, str]]:
-    """(pane id, session name) of the tmux panes whose shell is the session's process or an ancestor."""
-    done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_name}"])
+    """(pane id, session id) of the tmux panes whose shell is the session's process or an ancestor.
+
+    The session id ($N), not its name: the name is often the project's, and the attach command stays in
+    the terminal's command line, which any local account can read (#55)."""
+    done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_id}"])
     if done.returncode != 0:
         if "no server running" in done.stderr:
             return []

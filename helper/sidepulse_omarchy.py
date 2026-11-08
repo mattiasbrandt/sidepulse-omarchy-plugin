@@ -98,7 +98,9 @@ HOOK_COMMAND_TIMEOUT_SECONDS = 60.0
 # The libnotify action a click invokes. Omarchy's notification server invokes
 # only this one, and only while the sender is alive (D20).
 NOTIFY_ACTION = "default"
-NOTIFY_BODY_LIMIT = 200
+# The Ask notice's body. Fixed: notify-send's arguments are readable by every local account
+# (/proc/<pid>/cmdline) while the notice waits, so nothing from the session goes there (#55).
+NOTIFY_BODY = "A session is waiting for you. Open it from here or from the SidePulse popup."
 # Upstream's agent names as the popup writes them (GLOSSARY: Agent).
 PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "junie": "Junie"}
 NOTIFY_REASON = "notify-send is not installed; the Ask notifications need it (libnotify)"
@@ -604,14 +606,13 @@ def asking_sessions(statuses: list[Any]) -> dict[tuple[str, str], Any]:
 
 
 def notification_text(status: Any) -> tuple[str, str]:
-    """The summary and body of the notice for a session that asks."""
+    """The summary and body of the notice for a session that asks: the agent's name only.
+
+    The project and the agent's question stay out: they would sit in notify-send's
+    command line, which any local account can read while the notice waits (#55).
+    """
     name = PROVIDER_NAMES.get(status.provider.lower(), status.provider)
-    project = Path(status.cwd).name if status.cwd else ""
-    message = " ".join(str(status.message or "").split())
-    body = ": ".join(part for part in (project, message) if part)
-    if len(body) > NOTIFY_BODY_LIMIT:
-        body = body[: NOTIFY_BODY_LIMIT - 3].rstrip() + "..."
-    return f"{name} needs attention", body
+    return f"{name} needs attention", NOTIFY_BODY
 
 
 def notify_argv(summary: str, body: str) -> list[str]:

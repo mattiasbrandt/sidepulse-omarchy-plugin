@@ -121,7 +121,8 @@ been done.
   installs or removes SidePulse's own hooks;
 - Bar LEDs on or off;
 - the idle timeout (15 minutes to 4 hours) and session retention (1 hour to 7 days);
-- **Notify when a session asks** (off by default). The notice has an Open session
+- **Notify when a session asks** (off by default). The notice names only the
+  agent that asks, not the project or the question, and has an Open session
   action: clicking it opens the session;
 - the Keep awake policy;
 - the hook log, the last eight hook decisions.
@@ -286,7 +287,9 @@ What it touches at run time:
   Start service; `hyprctl clients -j` and `hyprctl dispatch` (list and focus
   windows); `herdr` and `tmux` (find and select a pane, and attach a client);
   `xdg-terminal-exec` (resume a session or attach to a multiplexer, only when you
-  choose a session); `notify-send` (the notices; a click opens the session);
+  choose a session); `notify-send` (the notices, whose text names only the agent, never the project or
+  its messages, since a command line is readable by other local accounts; a click
+  opens the session);
   `systemd-inhibit --what=sleep:handle-lid-switch --mode=block`, a child that holds
   the sleep lock while Keep awake wants it, and ends with the helper; and
   `busctl get-property` for logind's `LidClosed`, read only.

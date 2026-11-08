@@ -469,6 +469,10 @@ _Filled in during grilling, one entry per answered question._
   *Amended in #38:* the battery safeguard's notices (D11) use the same child list with
   no action and no wait, keyed `None`, so a click on them does nothing and their exit
   is still read as D14 does. They are not gated by this switch.
+  *Amended in #55:* the notice names only the agent ("Claude Code needs attention")
+  over a fixed body. The project and the agent's question stay out, because
+  notify-send's arguments can be read by any local account through `/proc/<pid>/cmdline`
+  while the notice waits (marketplace review, omacom/omarchy-plugin-marketplace#11078).
 - **D21 The look follows the product (plan review):** popup device rows draw
   a SidePulse Dot (2 LEDs) or SidePulse Pro (8 LEDs) lit live; the Bar LEDs
   match the connected product (2 or 8; 8 with none or both, since upstream

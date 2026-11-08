@@ -46,23 +46,31 @@ def test_only_asking_statuses_with_a_session_id_are_asks():
 
 
 def test_notify_send_gets_an_action_named_default_and_waits_for_the_click():
-    argv = helper.notify_argv("Claude Code needs attention", "project: Proceed?")
+    argv = helper.notify_argv("Claude Code needs attention", helper.NOTIFY_BODY)
     assert argv[0] == "notify-send"
     assert "--wait" in argv
     assert f"--action={helper.NOTIFY_ACTION}=Open session" in argv
-    assert argv[-2:] == ["Claude Code needs attention", "project: Proceed?"]
+    assert argv[-2:] == ["Claude Code needs attention", helper.NOTIFY_BODY]
 
 
-def test_notification_text_names_the_agent_and_the_project_and_flattens_the_message():
-    summary, body = helper.notification_text(status("a", "waiting_for_input", message="line one\n\n  line two"))
+def test_notification_text_names_only_the_agent():
+    summary, body = helper.notification_text(status("a", "waiting_for_input"))
     assert summary == "Claude Code needs attention"
-    assert body == "project: line one line two"
+    assert body == helper.NOTIFY_BODY
 
 
-def test_notification_body_is_cut_to_a_short_line():
-    summary, body = helper.notification_text(status("a", "waiting_for_input", message="x" * 500))
-    assert len(body) <= 200
-    assert body.endswith("...")
+def test_the_notice_command_line_holds_nothing_from_the_session(monkeypatch):
+    # Any local account can read a process's command line (/proc/<pid>/cmdline) while the notice waits,
+    # so the project and the agent's question must not reach notify-send's arguments (#55).
+    started: list[list[str]] = []
+    h = helper.Helper(io.StringIO())
+    monkeypatch.setattr(h, "start_notice", lambda argv, key: started.append(argv))
+    h.notify(status("a", "waiting_for_input", cwd="/home/user/acme-merger-2027",
+                    message="Paste the API key sk-live-123 to continue?"))
+    [argv] = started
+    line = " ".join(argv)
+    for secret in ("acme-merger-2027", "/home/user", "sk-live-123", "API key", "Paste"):
+        assert secret not in line
 
 
 def test_an_asking_session_notifies_once_when_it_enters_ask(monkeypatch):

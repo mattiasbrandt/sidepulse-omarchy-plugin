@@ -235,3 +235,38 @@ def test_spawn_adds_the_given_variables_to_the_environment():
 def test_a_terminal_that_hands_off_and_exits_cleanly_is_success():
     # Single-instance terminals (Ghostty) pass the window to a running one and exit 0.
     helper.spawn_detached(["true"], None)
+
+
+# A malformed file or command output in the lookup fails the click, not the helper (#55).
+
+def test_a_lookup_that_meets_malformed_data_answers_with_a_failed_result(monkeypatch):
+    import io
+    import json
+
+    out = io.StringIO()
+    h = helper.Helper(out)
+    h.capabilities["sessions"] = {"ok": True, "reason": ""}
+    h.session_statuses = [status()]
+
+    def malformed(*args, **kwargs):
+        raise KeyError("pid")  # a Claude session file without a pid
+
+    monkeypatch.setattr(helper, "resolve", malformed)
+    h.open_session({"provider": "claude", "session_id": SESSION})
+    [result] = [e for e in map(json.loads, out.getvalue().splitlines()) if e["type"] == "result"]
+    assert (result["command"], result["ok"]) == ("open-session", False)
+    assert "KeyError" in result["message"]
+
+
+def test_a_service_start_that_hangs_is_a_failed_start(tmp_path, monkeypatch):
+    slow = tmp_path / "python"
+    slow.write_text("#!/bin/sh\nsleep 5\n")
+    slow.chmod(0o755)
+    monkeypatch.setattr(helper, "SERVICE_START_TIMEOUT_SECONDS", 0.3)
+    ok, message = helper.start_service(str(slow))
+    assert ok is False and "did not finish" in message
+
+
+def test_a_service_start_that_cannot_run_is_a_failed_start(tmp_path):
+    ok, message = helper.start_service(str(tmp_path / "no-such-python"))
+    assert ok is False and "cannot run" in message

@@ -416,14 +416,22 @@ def setup_event(*, installed: bool, service_running: bool | None, device_count: 
 
 
 def start_service(python: str) -> tuple[bool, str]:
-    """`sidepulse service start`, run with the same interpreter as the helper."""
-    result = subprocess.run(
-        [python, "-I", "-m", "sidepulse", "service", "start"],
-        capture_output=True,
-        text=True,
-        timeout=SERVICE_START_TIMEOUT_SECONDS,
-        check=False,
-    )
+    """`sidepulse service start`, run with the same interpreter as the helper.
+
+    A start that hangs past SERVICE_START_TIMEOUT_SECONDS or cannot run is a failed start with the
+    reason, not an exception that would end the helper."""
+    try:
+        result = subprocess.run(
+            [python, "-I", "-m", "sidepulse", "service", "start"],
+            capture_output=True,
+            text=True,
+            timeout=SERVICE_START_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"sidepulse service start did not finish within {SERVICE_START_TIMEOUT_SECONDS} s"
+    except OSError as exc:
+        return False, f"cannot run {python}: {exc}"
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output or f"exit {result.returncode}"
 
@@ -2620,6 +2628,10 @@ class Helper:
             ok, message = perform_open(plan, status, run_command, spawn_detached)
         except CommandFailed as exc:
             ok, message = False, f"Could not open {status.display_name}: {exc}"
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            # The lookup reads files and command output the helper does not control (session files,
+            # transcripts, hyprctl, herdr, tmux): a malformed one fails this click, not the helper (#55).
+            ok, message = False, f"Could not open {status.display_name}: {type(exc).__name__}: {exc}"
         self.emit({"type": "result", "command": "open-session", "ok": ok, "action": plan["action"],
                    "message": message})
 

@@ -20,9 +20,11 @@ Paths under `src/sidepulse/` are upstream's.
 | `helper/sidepulse_omarchy.py` | `recent_statuses` | `src/sidepulse/status_bar.py` | adapted |
 | `helper/sidepulse_omarchy.py` | `MODE_STATES`, `STATE_LABELS`, `STATE_COLOURS` | `src/sidepulse/status_bar.py` | copied mapping and values |
 | `helper/sidepulse_omarchy.py` | `_engine_input` | `writeInput` in `src/sidepulse/led_wasm.py` | ported to Python |
+| `helper/sidepulse_omarchy.py` | `SdLedWasm.parse` (the over-long length and the packed result's decoding) | `sdledParse` and `decodeParseResult` in `src/sidepulse/led_wasm.py` | ported to Python |
 | `helper/barleds.mjs` | `blendedColourAt`, `toneMappedColour`, `bandColumns`, `paintBand`, the `LED_*` and `BLEND_COLUMN_WIDTH` constants | `src/sidepulse/virtual_device.py` | ported to JavaScript |
 | `helper/sessions.mjs` | `formatAge` | `format_age` in `src/sidepulse/status_bar.py` | ported to JavaScript |
 | `tests/barleds_vectors.json` | test vectors | output of `src/sidepulse/virtual_device.py` | generated |
+| `tests/bar_leds_reference.py` | `upstream_vector_cases` (programs and expected frames) | `tests/test_sidepulse.py::test_led_wasm_controller_*` | copied |
 
 ## SidePulse's license
 

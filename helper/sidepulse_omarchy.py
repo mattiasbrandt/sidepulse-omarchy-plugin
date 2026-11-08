@@ -904,7 +904,10 @@ class SdLedWasm:
             self._initialized = True
 
     def parse(self, text: str, now_ms: float):
-        """Parse a program; returns upstream's LedWasmParseResult (ok, error, error_name, line, column)."""
+        """Parse a program; returns upstream's LedWasmParseResult (ok, error, error_name, line, column).
+
+        Ported from upstream's sdledParse and decodeParseResult (led_wasm.py): the 513 length for a
+        program over the buffer and the bit layout of the packed result."""
         from sidepulse.led_wasm import ERROR_NAMES, LedWasmParseResult
 
         self._ensure_initialized(now_ms)

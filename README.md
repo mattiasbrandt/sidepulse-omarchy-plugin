@@ -272,9 +272,12 @@ What it touches at run time:
   `busctl`; and the mount points `/media/$USER`, `/run/media/$USER`, `/media`,
   `/run/media` and `/mnt` for SidePulse devices.
 - **Writes** each mounted SidePulse device's `LEDS.LED` file (its light program),
-  through SidePulse's code; SidePulse's `settings.json` through SidePulse's own
-  save function (the Keep awake policy, the idle timeout and retention, the Bar
-  LEDs switch, and a device's `led_display`); and the plugin's own entry in
+  through SidePulse's code, only when that file is a regular file of at most an LED
+  program's 512 bytes, or absent: a device whose file is a link, a FIFO or larger is
+  left alone and named in the popup; SidePulse's `settings.json` through SidePulse's
+  own save function, staged beside it and moved into place in one rename (the Keep
+  awake policy, the idle timeout and retention, the Bar LEDs switch, and a device's
+  `led_display`); and the plugin's own entry in
   `~/.config/omarchy/shell.json`, which Omarchy writes.
 - **Edits agent configs**, only when you switch an agent's hooks in Settings:
   `python -I -m sidepulse agent-monitor install|uninstall <agent>` in SidePulse's venv
@@ -287,12 +290,16 @@ What it touches at run time:
   Start service; `hyprctl clients -j` and `hyprctl dispatch` (list and focus
   windows); `herdr` and `tmux` (find and select a pane, and attach a client);
   `xdg-terminal-exec` (resume a session or attach to a multiplexer, only when you
-  choose a session); `notify-send` (the notices, whose text names only the agent, never the project or
-  its messages, since a command line is readable by other local accounts; a click
-  opens the session);
+  choose a session); `notify-send` (the notices; a click opens the session);
   `systemd-inhibit --what=sleep:handle-lid-switch --mode=block`, a child that holds
   the sleep lock while Keep awake wants it, and ends with the helper; and
   `busctl get-property` for logind's `LidClosed`, read only.
+- **Keeps session details off command lines**, since other local accounts can read
+  a process's command line: the Ask notice names only the agent, not the project or
+  the question; a resume reaches the terminal through its environment
+  (`SIDEPULSE_RESUME`), which only you can read, not through its arguments; and a
+  tmux client attaches by session id, not by name. The resumed agent's own command
+  line still holds its session id (`claude --resume <id>`), as when you type it.
 - **Developers only:** `scripts/live-check.sh` is not run by users. It copies the
   working tree into `~/.config/omarchy/plugins`, backs up `shell.json` to a
   private directory (`$XDG_RUNTIME_DIR/sidepulse-live-check`, mode 0700, the copy

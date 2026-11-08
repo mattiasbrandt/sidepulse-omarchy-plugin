@@ -77,6 +77,7 @@ import re
 import select
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -98,11 +99,14 @@ HOOK_COMMAND_TIMEOUT_SECONDS = 60.0
 # The libnotify action a click invokes. Omarchy's notification server invokes
 # only this one, and only while the sender is alive (D20).
 NOTIFY_ACTION = "default"
-NOTIFY_BODY_LIMIT = 200
+# The Ask notice's body. Fixed: notify-send's arguments are readable by every local account
+# (/proc/<pid>/cmdline) while the notice waits, so nothing from the session goes there (#55).
+NOTIFY_BODY = "A session is waiting for you. Open it from here or from the SidePulse popup."
 # Upstream's agent names as the popup writes them (GLOSSARY: Agent).
 PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "junie": "Junie"}
 NOTIFY_REASON = "notify-send is not installed; the Ask notifications need it (libnotify)"
-INSTALL_COMMAND = "curl -fsSL https://sidepulse.io/setup.sh | bash"
+# Where SidePulse's own setup steps live. The popup points there rather than showing a download piped to a shell.
+INSTALL_PAGE = "https://sidepulse.io/setup"
 # A device's Display (D9). Upstream stores only Agent or Manual ("custom") on
 # Linux, so Battery and Off hold the device in Manual while the helper drives
 # it (Battery, D10) or the user keeps it dark (Off).
@@ -155,7 +159,7 @@ REQUIRED_NAMES = {
     },
     "service": {"sidepulse.service_launch": ("service_is_running",)},
     "devices": {
-        "sidepulse.device_writer": ("discover_devices", "write_led_program"),
+        "sidepulse.device_writer": ("discover_devices", "write_led_program", "MAX_LED_BYTES"),
         "sidepulse.settings": ("load_settings", "save_settings"),
         "sidepulse.led_status": ("led_count_for_target", "builtin_animation_program"),
     },
@@ -390,7 +394,7 @@ def setup_event(*, installed: bool, service_running: bool | None, device_count: 
         items.append({
             "id": "install",
             "title": "SidePulse is not installed",
-            "detail": f"Install it with: {INSTALL_COMMAND}",
+            "detail": f"Install it with SidePulse's own installer; see {INSTALL_PAGE}",
             "action": None,
         })
     if service_running is False:
@@ -412,14 +416,22 @@ def setup_event(*, installed: bool, service_running: bool | None, device_count: 
 
 
 def start_service(python: str) -> tuple[bool, str]:
-    """`sidepulse service start`, run with the same interpreter as the helper."""
-    result = subprocess.run(
-        [python, "-I", "-m", "sidepulse", "service", "start"],
-        capture_output=True,
-        text=True,
-        timeout=SERVICE_START_TIMEOUT_SECONDS,
-        check=False,
-    )
+    """`sidepulse service start`, run with the same interpreter as the helper.
+
+    A start that hangs past SERVICE_START_TIMEOUT_SECONDS or cannot run is a failed start with the
+    reason, not an exception that would end the helper."""
+    try:
+        result = subprocess.run(
+            [python, "-I", "-m", "sidepulse", "service", "start"],
+            capture_output=True,
+            text=True,
+            timeout=SERVICE_START_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"sidepulse service start did not finish within {SERVICE_START_TIMEOUT_SECONDS} s"
+    except OSError as exc:
+        return False, f"cannot run {python}: {exc}"
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output or f"exit {result.returncode}"
 
@@ -468,13 +480,35 @@ def change_settings(change: Any) -> None:
     models survive and keys it does not model are dropped, as upstream's CLI
     drops them. A file that is not a JSON object raises here, before anything
     is overwritten.
+
+    The service writes the same file in place, and upstream's load_settings
+    falls back to the defaults on a file it cannot parse, so a read that met a
+    half-written file could save the defaults over the user's settings (#55).
+    The text is read once, checked, and handed to upstream as a private copy
+    beside it; upstream saves into that copy, which then replaces the file in
+    one rename, keeping the file's mode. A settings.json that is a link (a
+    dotfiles checkout) keeps being one: the rename lands on the file it names.
     """
     from sidepulse.settings import default_settings_path, load_settings, save_settings
 
-    path = default_settings_path()
-    if path.exists() and not isinstance(json.loads(path.read_text()), dict):
+    path = Path(os.path.realpath(default_settings_path()))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text() if path.exists() else None
+    if text is not None and not isinstance(json.loads(text), dict):
         raise ValueError(f"{path} is not a JSON object; not overwriting it")
-    save_settings(change(load_settings(path)), path)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    staged = Path(name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text or "")
+        current = load_settings(staged) if text is not None else load_settings(path)
+        save_settings(change(current), staged)
+        if text is not None:
+            os.chmod(staged, stat.S_IMODE(os.stat(path).st_mode))
+        os.replace(staged, path)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
 
 
 def settings_event(settings: Any) -> dict[str, Any]:
@@ -604,14 +638,13 @@ def asking_sessions(statuses: list[Any]) -> dict[tuple[str, str], Any]:
 
 
 def notification_text(status: Any) -> tuple[str, str]:
-    """The summary and body of the notice for a session that asks."""
+    """The summary and body of the notice for a session that asks: the agent's name only.
+
+    The project and the agent's question stay out: they would sit in notify-send's
+    command line, which any local account can read while the notice waits (#55).
+    """
     name = PROVIDER_NAMES.get(status.provider.lower(), status.provider)
-    project = Path(status.cwd).name if status.cwd else ""
-    message = " ".join(str(status.message or "").split())
-    body = ": ".join(part for part in (project, message) if part)
-    if len(body) > NOTIFY_BODY_LIMIT:
-        body = body[: NOTIFY_BODY_LIMIT - 3].rstrip() + "..."
-    return f"{name} needs attention", body
+    return f"{name} needs attention", NOTIFY_BODY
 
 
 def notify_argv(summary: str, body: str) -> list[str]:
@@ -667,16 +700,70 @@ def shown_colour(device: Device) -> str | None:
     """The first colour of the program the device holds now: what its LEDs
     show, which can differ from the menu-bar legend colour (Done is cyan on
     the device, green in the legend). None when dark or holding no program."""
-    match = COLOUR.search(shown_program(device) or "")
+    return colour_of(shown_program(device))
+
+
+def colour_of(program: str | None) -> str | None:
+    """The first colour in an LED program, as #RRGGBB; None when it has none."""
+    match = COLOUR.search(program or "")
     return "#" + match.group(1).upper() if match else None
 
 
-def shown_program(device: Device) -> str | None:
-    """The LED program the device holds now; None when it holds none."""
+def led_file_problem(target: str | Path) -> str | None:
+    """Why a device's LED file must not be read or written, or None when it is a regular file or absent.
+
+    Any auto-mounted volume whose name looks like a SidePulse, or that holds an LED file, is a device to
+    upstream's discovery, so the file can come from a stick someone else made: a symbolic link would turn
+    the LED write into a write to its target (upstream's writer follows it), a FIFO would block the
+    helper's loop, and a huge file would be read every second (#55). A program never exceeds upstream's
+    MAX_LED_BYTES.
+
+    The folder holding the file must be the user's own and writable by no one else: upstream's writer
+    opens the file again by name, so another local account able to write there could swap in a link
+    between this check and the write. A check that fails with an error names that error.
+    """
+    from sidepulse.device_writer import MAX_LED_BYTES
+
+    path = Path(target)
     try:
-        return Path(device.target).read_text().strip()
+        folder = os.lstat(path.parent)
+        if not stat.S_ISDIR(folder.st_mode):
+            return f"{path.parent} is not a folder; leaving it alone"
+        if folder.st_uid != os.getuid() or folder.st_mode & 0o022:
+            return f"{path.parent} can be written by another account; leaving {path.name} alone"
+        info = os.lstat(path)
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        return f"cannot check {path.name}: {exc}"
+    if stat.S_ISLNK(info.st_mode):
+        return f"{path.name} is a symbolic link; not reading or writing through it"
+    if not stat.S_ISREG(info.st_mode):
+        return f"{path.name} is not a regular file; leaving it alone"
+    if info.st_size > MAX_LED_BYTES:
+        return f"{path.name} is {info.st_size} bytes, more than an LED program's {MAX_LED_BYTES}; leaving it alone"
+    return None
+
+
+def shown_program(device: Device) -> str | None:
+    """The LED program the device holds now; None when it holds none.
+
+    Read without following a link or blocking on a FIFO, and at most one byte past upstream's limit, so a
+    file swapped after discovery (led_file_problem) cannot hang or flood the helper. Raises OSError for a
+    file that is not a regular one or is too long."""
+    from sidepulse.device_writer import MAX_LED_BYTES
+
+    try:
+        fd = os.open(device.target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError(f"{Path(device.target).name} is not a regular file")
+        data = handle.read(MAX_LED_BYTES + 1)
+    if len(data) > MAX_LED_BYTES:
+        raise OSError(f"{Path(device.target).name} is longer than an LED program's {MAX_LED_BYTES} bytes")
+    return data.decode("utf-8", errors="replace").strip()
 
 
 def icon_device(devices: list[Device]) -> Device | None:
@@ -829,7 +916,10 @@ class SdLedWasm:
             self._initialized = True
 
     def parse(self, text: str, now_ms: float):
-        """Parse a program; returns upstream's LedWasmParseResult (ok, error, error_name, line, column)."""
+        """Parse a program; returns upstream's LedWasmParseResult (ok, error, error_name, line, column).
+
+        Ported from upstream's sdledParse and decodeParseResult (led_wasm.py): the 513 length for a
+        program over the buffer and the bit layout of the packed result."""
         from sidepulse.led_wasm import ERROR_NAMES, LedWasmParseResult
 
         self._ensure_initialized(now_ms)
@@ -1156,8 +1246,11 @@ def herdr_client_pids(proc: Proc) -> list[int]:
 
 
 def tmux_panes_holding(chain: list[int], run: Run) -> list[tuple[str, str]]:
-    """(pane id, session name) of the tmux panes whose shell is the session's process or an ancestor."""
-    done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_name}"])
+    """(pane id, session id) of the tmux panes whose shell is the session's process or an ancestor.
+
+    The session id ($N), not its name: the name is often the project's, and the attach command stays in
+    the terminal's command line, which any local account can read (#55)."""
+    done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_id}"])
     if done.returncode != 0:
         if "no server running" in done.stderr:
             return []
@@ -1261,13 +1354,24 @@ def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None =
 
 # --- Open a session (D8): act on the lookup's plan ---------------------------
 
-Spawn = Callable[[list[str], str | None], None]
+Spawn = Callable[..., None]  # (argv, cwd, env=None): env adds variables to the helper's environment
+
+# The resume command travels in the environment, not in argv: a terminal keeps its command line for as long
+# as the window is open, and any local account can read that (/proc/<pid>/cmdline), while /proc/<pid>/environ
+# is the owner's alone (#55). The shell refuses to run when the variable did not arrive (a terminal that
+# drops the environment), keeps the message on screen until Enter, and keeps the variable from the agent.
+RESUME_ENV = "SIDEPULSE_RESUME"
+RESUME_SCRIPT = (
+    f'[ -n "${RESUME_ENV}" ] || {{ echo "SidePulse: the resume command did not reach this terminal." >&2;'
+    f' printf "Press Enter to close. "; read -r _; exit 1; }};'
+    f' resume=${RESUME_ENV}; unset {RESUME_ENV}; eval "$resume"'
+)
 
 
 SPAWN_SETTLE_SECONDS = 1.0
 
 
-def spawn_detached(argv: list[str], cwd: str | None) -> None:
+def spawn_detached(argv: list[str], cwd: str | None, env: dict[str, str] | None = None) -> None:
     """Starts a terminal (or any command) that outlives the helper.
 
     Raises CommandFailed when it cannot start, or when it exits with an error
@@ -1280,7 +1384,8 @@ def spawn_detached(argv: list[str], cwd: str | None) -> None:
     with tempfile.TemporaryFile() as err:
         try:
             child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                     stderr=err, start_new_session=True)
+                                     stderr=err, start_new_session=True,
+                                     env={**os.environ, **env} if env else None)
         except OSError as exc:
             raise CommandFailed(f"{argv[0]} cannot start: {exc}") from exc
         try:
@@ -1341,7 +1446,7 @@ def perform_open(plan: dict, status: Any, run: Run, spawn: Spawn) -> tuple[bool,
         if command is None:
             return False, f"{status.display_name} has no session id to resume."
         try:
-            spawn(["xdg-terminal-exec", "--", "sh", "-c", command], status.cwd)
+            spawn(["xdg-terminal-exec", "--", "sh", "-c", RESUME_SCRIPT], status.cwd, {RESUME_ENV: command})
         except CommandFailed as exc:
             return False, f"Could not resume {status.display_name}: {exc}"
         return True, f"Resuming {status.display_name} in a terminal."
@@ -1492,8 +1597,10 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
     """Upstream's BatterySnapshot from /sys/class/power_supply (D10).
 
     The first battery gives the percent. An online supply that is not a battery
-    (an adapter) or a charging battery means plugged in. No directory or no
-    battery is a snapshot with battery_present False. An unreadable file raises.
+    (an adapter) or a charging battery means plugged in. A supply whose scope is
+    Device (a gamepad, mouse or headset powered by its own battery) is not the
+    machine's and is skipped. No directory or no battery is a snapshot with
+    battery_present False. An unreadable file raises.
     """
     from sidepulse.battery import BatterySnapshot
 
@@ -1502,6 +1609,8 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
     batteries: list[Path] = []
     plugged = False
     for supply in sorted(root.iterdir()):
+        if (supply / "scope").exists() and _sysfs(supply / "scope") == "Device":
+            continue
         if _sysfs(supply / "type") == "Battery":
             present = supply / "present"
             if not present.exists() or _sysfs(present) == "1":
@@ -1929,18 +2038,28 @@ class Helper:
         if not self.capabilities.get("devices", {}).get("ok"):
             self.device_count = None
             return
+        unsafe = False
         try:
-            self.devices = discover_device_rows()
+            found = discover_device_rows()
         except OSError as exc:
             self.report("devices", f"cannot look for SidePulse devices: {exc}")
             self.devices = []
             self.device_count = None
         else:
+            # A device whose LED file is not a plain, short file is left alone and named in the popup (#55).
+            self.devices = []
+            for device in found:
+                problem = led_file_problem(device.target)
+                if problem is None:
+                    self.devices.append(device)
+                else:
+                    unsafe = True
+                    self.report("devices", f"{device.name}: {problem}")
             from sidepulse.device_writer import DeviceWriteError
             from sidepulse.settings import load_settings
 
             self.device_count = len(self.devices)
-            failed = False
+            failed = unsafe
             # Nothing is reconciled until the widget has sent its remembered displays.
             pending = self.devices if self.displays is not None else []
             settings = load_settings()
@@ -1960,7 +2079,7 @@ class Helper:
 
         settings = load_settings()
         self.device_programs = {
-            device.id: full_brightness_program(shown_program(device), settings.brightness_for_device(device.id))
+            device.id: full_brightness_program(self.read_program(device), settings.brightness_for_device(device.id))
             for device in self.devices
         }
         self.refresh_bar()
@@ -1968,6 +2087,17 @@ class Helper:
         if force or event != self.last_devices:
             self.last_devices = event
             self.emit(event)
+
+    def read_program(self, device: Device) -> str | None:
+        """shown_program, with a file that turned unsafe since discovery reported, not raised."""
+        try:
+            return shown_program(device)
+        except OSError as exc:
+            self.report("devices", f"{device.name}: {exc}")
+            return None
+
+    def read_colour(self, device: Device) -> str | None:
+        return colour_of(self.read_program(device))
 
     def devices_event(self) -> dict[str, Any]:
         from sidepulse.settings import load_settings
@@ -1984,7 +2114,7 @@ class Helper:
                 "led_count": device.led_count,
                 "display": display_of(self.displays or {}, device.id, self.battery_offered),
                 "percent": round(settings.brightness_for_device(device.id) * 100 / 255),
-                "colour": shown_colour(device),
+                "colour": self.read_colour(device),
             })
         return {"type": "devices", "items": items}
 
@@ -2513,6 +2643,10 @@ class Helper:
             ok, message = perform_open(plan, status, run_command, spawn_detached)
         except CommandFailed as exc:
             ok, message = False, f"Could not open {status.display_name}: {exc}"
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            # The lookup reads files and command output the helper does not control (session files,
+            # transcripts, hyprctl, herdr, tmux): a malformed one fails this click, not the helper (#55).
+            ok, message = False, f"Could not open {status.display_name}: {type(exc).__name__}: {exc}"
         self.emit({"type": "result", "command": "open-session", "ok": ok, "action": plan["action"],
                    "message": message})
 

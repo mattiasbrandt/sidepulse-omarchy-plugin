@@ -255,6 +255,13 @@ _Filled in during grilling, one entry per answered question._
   `session_resume_command` run as `xdg-terminal-exec -- sh -c <command>` in the
   session cwd. Only the helper's own latest list is searched, so a session that
   has dropped out of it answers "no longer listed".
+  *Amended in #55:* the command travels in the environment (`SIDEPULSE_RESUME`),
+  not in argv: the terminal is started as `xdg-terminal-exec -- sh -c <fixed script>`,
+  and the script runs the variable, unsets it before the agent starts, and fails
+  with a message held on screen when the variable did not arrive. A terminal keeps
+  its argv for the window's life and any local account can read it, while
+  `/proc/<pid>/environ` is the owner's alone (marketplace review). A tmux client
+  attaches by session id (`$N`), not by name, for the same reason.
   *Amended after #12 (daily use):* the list leaves out a finished (Done) session
   whose folder no longer exists, such as a deleted worktree: it cannot be resumed,
   and Codex review runs in removed worker worktrees crowded the ten rows. It is
@@ -300,6 +307,17 @@ _Filled in during grilling, one entry per answered question._
   the device dark and reports `power` (D14), never the last value. Off stays Off on
   exit. A crash mid-takeover is repaired by the next reconcile, which re-derives
   upstream's value from the remembered Display.
+  *Amended in #55:* before the helper reads or writes a device's LED file it checks
+  that the file is a regular file no longer than upstream's `MAX_LED_BYTES`, or
+  absent. Upstream's discovery takes any auto-mounted volume named like a SidePulse
+  or holding an LED file, and its writer follows symbolic links, so a stick someone
+  else made could turn an LED write into a write elsewhere, or hang the helper on a
+  FIFO. A device that fails the check is left out and named in the popup. The read
+  itself never follows a link, never blocks, and stops one byte past the limit. This
+  is a safety check on input, not a re-derived upstream rule (D4). The folder holding
+  the file must also be the user's own and writable by no one else, since upstream's
+  writer reopens the file by name and another account could swap in a link between
+  the check and the write; an error during the check names the device and skips it.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -451,8 +469,9 @@ _Filled in during grilling, one entry per answered question._
   service" runs `sidepulse service start`), no device ("plug in a SidePulse").
   Agent State keeps working without a device.
   *Amended in #10:* the helper's `setup` event lists the items in that order
-  (`install`, `service`, `device`). The install item shows upstream's installer
-  line (`curl -fsSL https://sidepulse.io/setup.sh | bash`, from its README); the
+  (`install`, `service`, `device`). The install item points to SidePulse's setup page
+  (`https://sidepulse.io/setup`; *amended in #55*, it showed the `curl … | bash`
+  installer line, a pattern the marketplace flags); the
   service item carries the `start-service` action, which runs
   `python -I -m sidepulse service start` in the SidePulse venv. A missing venv
   is reported by the shell, since no helper can run there.
@@ -469,6 +488,10 @@ _Filled in during grilling, one entry per answered question._
   *Amended in #38:* the battery safeguard's notices (D11) use the same child list with
   no action and no wait, keyed `None`, so a click on them does nothing and their exit
   is still read as D14 does. They are not gated by this switch.
+  *Amended in #55:* the notice names only the agent ("Claude Code needs attention")
+  over a fixed body. The project and the agent's question stay out, because
+  notify-send's arguments can be read by any local account through `/proc/<pid>/cmdline`
+  while the notice waits (marketplace review, omacom/omarchy-plugin-marketplace#11078).
 - **D21 The look follows the product (plan review):** popup device rows draw
   a SidePulse Dot (2 LEDs) or SidePulse Pro (8 LEDs) lit live; the Bar LEDs
   match the connected product (2 or 8; 8 with none or both, since upstream

@@ -5,6 +5,7 @@ Commands and terminals are fakes: nothing here focuses a window or starts a term
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -34,12 +35,14 @@ class FakeRun:
 class FakeSpawn:
     def __init__(self, error: Exception | None = None) -> None:
         self.started: list[tuple[list[str], str | None]] = []
+        self.envs: list[dict[str, str] | None] = []
         self.error = error
 
-    def __call__(self, argv: list[str], cwd: str | None) -> None:
+    def __call__(self, argv: list[str], cwd: str | None, env: dict[str, str] | None = None) -> None:
         if self.error is not None:
             raise self.error
         self.started.append((argv, cwd))
+        self.envs.append(env)
 
 
 def status(provider: str = "claude", session_id: str | None = SESSION) -> AgentStatus:
@@ -69,8 +72,36 @@ def test_stopped_session_resumes_with_upstreams_command_in_a_terminal(provider, 
     ok, message = helper.perform_open({"action": "resume"}, status(provider), FakeRun(), spawn)
     assert ok is True
     assert session_resume_command(status(provider)) == expected
-    assert spawn.started == [(["xdg-terminal-exec", "--", "sh", "-c", expected], CWD)]
+    assert spawn.started == [(["xdg-terminal-exec", "--", "sh", "-c", helper.RESUME_SCRIPT], CWD)]
+    assert spawn.envs == [{helper.RESUME_ENV: expected}]
     assert "Resuming" in message
+
+
+def test_the_resume_command_line_holds_neither_the_project_nor_the_session():
+    # A terminal keeps its argv for the window's life and any local account can read it (#55).
+    spawn = FakeSpawn()
+    helper.perform_open({"action": "resume"}, status(), FakeRun(), spawn)
+    [(argv, _)] = spawn.started
+    assert SESSION not in " ".join(argv) and CWD not in " ".join(argv)
+
+
+def run_resume_script(tmp_path, env):
+    """RESUME_SCRIPT under a real sh, its stdin closed as a terminal that the user closes."""
+    return subprocess.run(["sh", "-c", helper.RESUME_SCRIPT], cwd=tmp_path, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, timeout=10, env={"PATH": os.environ["PATH"], **env})
+
+
+def test_the_resume_script_runs_the_command_from_the_environment_without_passing_it_on(tmp_path):
+    command = f"cd {tmp_path} && printf '%s' \"${{{helper.RESUME_ENV}-unset}}\" > ran"
+    done = run_resume_script(tmp_path, {helper.RESUME_ENV: command})
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "ran").read_text() == "unset"
+
+
+def test_the_resume_script_fails_loudly_when_the_command_did_not_arrive(tmp_path):
+    done = run_resume_script(tmp_path, {})
+    assert done.returncode == 1
+    assert "did not reach this terminal" in done.stderr
 
 
 def test_session_without_an_id_cannot_resume():
@@ -152,10 +183,10 @@ def test_tmux_pane_is_selected_and_its_client_attached_when_none_runs():
         "tmux select-pane -t %3": (0, "", ""),
     })
     spawn = FakeSpawn()
-    ok, _ = helper.perform_open({"action": "tmux", "pane": "%3", "session": "work", "client": None}, status(),
+    ok, _ = helper.perform_open({"action": "tmux", "pane": "%3", "session": "$2", "client": None}, status(),
                                 run, spawn)
     assert ok is True
-    assert spawn.started == [(["xdg-terminal-exec", "--", "tmux", "attach-session", "-t", "work"], None)]
+    assert spawn.started == [(["xdg-terminal-exec", "--", "tmux", "attach-session", "-t", "$2"], None)]
 
 
 def test_explain_runs_nothing_and_says_where_the_session_runs():
@@ -196,6 +227,46 @@ def test_a_terminal_that_keeps_running_is_left_running():
     assert time.monotonic() - started < helper.SPAWN_SETTLE_SECONDS + 1
 
 
+def test_spawn_adds_the_given_variables_to_the_environment():
+    helper.spawn_detached(["sh", "-c", '[ "$PROBE" = yes ] || { echo "PROBE missing" >&2; exit 3; }'], None,
+                          {"PROBE": "yes"})
+
+
 def test_a_terminal_that_hands_off_and_exits_cleanly_is_success():
     # Single-instance terminals (Ghostty) pass the window to a running one and exit 0.
     helper.spawn_detached(["true"], None)
+
+
+# A malformed file or command output in the lookup fails the click, not the helper (#55).
+
+def test_a_lookup_that_meets_malformed_data_answers_with_a_failed_result(monkeypatch):
+    import io
+    import json
+
+    out = io.StringIO()
+    h = helper.Helper(out)
+    h.capabilities["sessions"] = {"ok": True, "reason": ""}
+    h.session_statuses = [status()]
+
+    def malformed(*args, **kwargs):
+        raise KeyError("pid")  # a Claude session file without a pid
+
+    monkeypatch.setattr(helper, "resolve", malformed)
+    h.open_session({"provider": "claude", "session_id": SESSION})
+    [result] = [e for e in map(json.loads, out.getvalue().splitlines()) if e["type"] == "result"]
+    assert (result["command"], result["ok"]) == ("open-session", False)
+    assert "KeyError" in result["message"]
+
+
+def test_a_service_start_that_hangs_is_a_failed_start(tmp_path, monkeypatch):
+    slow = tmp_path / "python"
+    slow.write_text("#!/bin/sh\nsleep 5\n")
+    slow.chmod(0o755)
+    monkeypatch.setattr(helper, "SERVICE_START_TIMEOUT_SECONDS", 0.3)
+    ok, message = helper.start_service(str(slow))
+    assert ok is False and "did not finish" in message
+
+
+def test_a_service_start_that_cannot_run_is_a_failed_start(tmp_path):
+    ok, message = helper.start_service(str(tmp_path / "no-such-python"))
+    assert ok is False and "cannot run" in message

@@ -22,7 +22,9 @@ set -euo pipefail
 id=io.github.mattiasbrandt.sidepulse
 plugin_dir=$HOME/.config/omarchy/plugins/$id
 config=$HOME/.config/omarchy/shell.json
-backup=/tmp/shell.json.before-check
+# The backup lives in a private directory, not a shared /tmp name another account could pre-create or read.
+backup_dir=${XDG_RUNTIME_DIR:-$HOME/.cache}/sidepulse-live-check
+backup=$backup_dir/shell.json.before-check
 timeout_s=20
 
 die() {
@@ -87,7 +89,8 @@ case ${1:-} in
 up)
   [ ! -e "$backup" ] || die "a check is already running ($backup exists); run down first"
   [ ! -e "$plugin_dir" ] || die "$plugin_dir already exists (an installed copy?); remove or disable it yourself first"
-  cp "$config" "$backup"
+  install -d -m 700 "$backup_dir"
+  install -m 600 "$config" "$backup"
   install_tree
   rescan
   wait_known

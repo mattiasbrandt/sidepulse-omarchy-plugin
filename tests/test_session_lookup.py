@@ -222,12 +222,12 @@ class LookupStates(unittest.TestCase):
         self.sys.claude_session_file(302, SESSION, 42)
         answers = {
             "herdr pane list": fail("herdr is not installed"),
-            "tmux list-panes -a -F #{pane_pid} #{pane_id} #{session_name}":
-                ok("999 %1 other\n301 %3 work\n"),
+            "tmux list-panes -a -F #{pane_pid} #{pane_id} #{session_id}":
+                ok("999 %1 $0\n301 %3 $2\n"),
             "tmux list-clients -F #{client_pid}": ok(""),
         }
         result = self.sys.resolve("claude", answers=answers)
-        self.assertEqual((result["action"], result["pane"], result["session"]), ("tmux", "%3", "work"))
+        self.assertEqual((result["action"], result["pane"], result["session"]), ("tmux", "%3", "$2"))
         self.assertIsNone(result["client"])
 
     def test_tmux_without_server_is_not_an_error(self) -> None:
@@ -235,7 +235,7 @@ class LookupStates(unittest.TestCase):
         self.sys.claude_session_file(301, SESSION, 42)
         answers = {
             "herdr pane list": fail("herdr server is not running"),
-            "tmux list-panes -a -F #{pane_pid} #{pane_id} #{session_name}":
+            "tmux list-panes -a -F #{pane_pid} #{pane_id} #{session_id}":
                 fail("no server running on /tmp/tmux-1000/default"),
         }
         result = self.sys.resolve("claude", answers=answers)

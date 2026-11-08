@@ -143,6 +143,49 @@ def test_a_device_left_manual_by_a_crash_is_repaired_to_agent(home, mounts):
     assert load_settings().display_for_device(device.id) == "agent"
 
 
+def test_settings_are_saved_through_one_rename_and_keep_their_mode(home, mounts, monkeypatch):
+    device = device_by_name("PulseDot")
+    helper.change_settings(lambda s: s.with_device_brightness(device.id, 100))
+    path = settings_file(home)
+    path.chmod(0o640)
+    renames = []
+    real_replace = os.replace
+    monkeypatch.setattr(helper.os, "replace", lambda src, dst: (renames.append((Path(src), Path(dst))),
+                                                                 real_replace(src, dst)))
+    helper.change_settings(lambda s: s.with_device_brightness(device.id, 50))
+    [(source, destination)] = renames
+    assert destination == path and source.parent == path.parent and source != path
+    assert load_settings().brightness_for_device(device.id) == 50
+    assert oct(path.stat().st_mode & 0o777) == "0o640"
+    assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(".")) == []
+
+
+def test_a_half_written_settings_file_is_not_replaced_by_the_defaults(home, mounts):
+    # The service writes settings.json in place; a read in that window sees a cut file.
+    device = device_by_name("PulseDot")
+    path = settings_file(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"agent_list": {"idle_timeout_sec')
+    with pytest.raises(ValueError):
+        helper.change_settings(lambda s: s.with_device_brightness(device.id, 50))
+    assert path.read_text() == '{"agent_list": {"idle_timeout_sec'
+
+
+def test_a_failed_change_leaves_the_settings_and_no_staging_file(home, mounts):
+    device = device_by_name("PulseDot")
+    helper.change_settings(lambda s: s.with_device_brightness(device.id, 100))
+    path = settings_file(home)
+    before = path.read_text()
+
+    def broken(settings):
+        raise RuntimeError("change failed")
+
+    with pytest.raises(RuntimeError):
+        helper.change_settings(broken)
+    assert path.read_text() == before
+    assert [p.name for p in path.parent.iterdir() if p.name.startswith(".")] == []
+
+
 def test_off_repairs_a_program_written_after_it(home, mounts, monkeypatch):
     # The service read settings before Off was saved, then wrote its agent
     # program after the helper's off program (upstream service.sync_outputs).

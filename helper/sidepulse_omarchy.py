@@ -472,13 +472,34 @@ def change_settings(change: Any) -> None:
     models survive and keys it does not model are dropped, as upstream's CLI
     drops them. A file that is not a JSON object raises here, before anything
     is overwritten.
+
+    The service writes the same file in place, and upstream's load_settings
+    falls back to the defaults on a file it cannot parse, so a read that met a
+    half-written file could save the defaults over the user's settings (#55).
+    The text is read once, checked, and handed to upstream as a private copy
+    beside it; upstream saves into that copy, which then replaces the file in
+    one rename, keeping the file's mode.
     """
     from sidepulse.settings import default_settings_path, load_settings, save_settings
 
     path = default_settings_path()
-    if path.exists() and not isinstance(json.loads(path.read_text()), dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = path.read_text() if path.exists() else None
+    if text is not None and not isinstance(json.loads(text), dict):
         raise ValueError(f"{path} is not a JSON object; not overwriting it")
-    save_settings(change(load_settings(path)), path)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    staged = Path(name)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text or "")
+        current = load_settings(staged) if text is not None else load_settings(path)
+        save_settings(change(current), staged)
+        if text is not None:
+            os.chmod(staged, stat.S_IMODE(os.stat(path).st_mode))
+        os.replace(staged, path)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
 
 
 def settings_event(settings: Any) -> dict[str, Any]:

@@ -1493,8 +1493,10 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
     """Upstream's BatterySnapshot from /sys/class/power_supply (D10).
 
     The first battery gives the percent. An online supply that is not a battery
-    (an adapter) or a charging battery means plugged in. No directory or no
-    battery is a snapshot with battery_present False. An unreadable file raises.
+    (an adapter) or a charging battery means plugged in. A supply whose scope is
+    Device (a gamepad, mouse or headset powered by its own battery) is not the
+    machine's and is skipped. No directory or no battery is a snapshot with
+    battery_present False. An unreadable file raises.
     """
     from sidepulse.battery import BatterySnapshot
 
@@ -1503,6 +1505,8 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
     batteries: list[Path] = []
     plugged = False
     for supply in sorted(root.iterdir()):
+        if (supply / "scope").exists() and _sysfs(supply / "scope") == "Device":
+            continue
         if _sysfs(supply / "type") == "Battery":
             present = supply / "present"
             if not present.exists() or _sysfs(present) == "1":

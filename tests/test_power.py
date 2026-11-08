@@ -175,6 +175,22 @@ def test_a_first_battery_that_is_not_present_is_skipped(tmp_path):
     assert helper.read_battery(tmp_path).percent == 66
 
 
+def test_a_peripheral_battery_is_not_the_machines(tmp_path):
+    # A Switch controller over Bluetooth shows up as a Battery with scope Device and no capacity file;
+    # reading it as the machine's battery failed every power read on a desktop.
+    make_supply(tmp_path, "nintendo_switch_controller_battery_0003", type="Battery", present="1",
+                scope="Device", status="Full", capacity_level="Full")
+    assert helper.read_battery(tmp_path).battery_present is False
+
+
+def test_a_peripheral_battery_does_not_hide_the_machines(tmp_path):
+    make_supply(tmp_path, "BAT0", type="Battery", present="1", capacity="55", status="Discharging",
+                scope="System")
+    make_supply(tmp_path, "hidpp_battery_0", type="Battery", present="1", scope="Device", status="Discharging")
+    battery = helper.read_battery(tmp_path)
+    assert (battery.battery_present, battery.percent) == (True, 55)
+
+
 # --- The lid: logind's LidClosed through busctl ---
 
 @pytest.mark.parametrize(("stdout", "closed"), [("b true\n", True), ("b false\n", False)])

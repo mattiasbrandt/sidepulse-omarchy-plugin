@@ -105,5 +105,40 @@ def test_the_guard_reads_upstreams_program_limit():
     assert "MAX_LED_BYTES" in helper.REQUIRED_NAMES["devices"]["sidepulse.device_writer"]
 
 
+def test_a_folder_others_can_write_is_left_alone(world):
+    # Another account able to write there could swap LEDS.LED for a link between the check and the write.
+    world.led.write_text("brightness 128\n")
+    world.led.parent.chmod(0o777)
+    try:
+        set_off(world)
+        assert world.led.read_text() == "brightness 128\n"
+        assert world.dot_id not in listed_ids(world)
+        assert any("another account" in message for message in device_errors(world.out))
+    finally:
+        world.led.parent.chmod(0o755)
+
+
+def test_a_folder_owned_by_someone_else_is_left_alone(world, monkeypatch):
+    real_getuid = os.getuid
+    monkeypatch.setattr(helper.os, "getuid", lambda: real_getuid() + 1)
+    assert "another account" in helper.led_file_problem(world.led)
+
+
+def test_an_error_while_checking_names_the_device_and_keeps_the_helper(world, monkeypatch):
+    # A permission or I/O error on one stick must not end the helper (Codex review of #56).
+    (world.led.parent.parent / "SidePulsePro").mkdir()
+    real_lstat = os.lstat
+
+    def flaky(path, *args, **kwargs):
+        if Path(path).name == "LEDS.LED" and Path(path).parent.name == "PulseDot":
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(helper.os, "lstat", flaky)
+    world.h.refresh_devices(force=True)
+    assert listed_ids(world) == [str(world.led.parent.parent / "SidePulsePro")]
+    assert any("cannot check LEDS.LED" in message for message in device_errors(world.out))
+
+
 def test_an_absent_led_file_is_fine(world):
     assert helper.led_file_problem(Path(world.led)) is None

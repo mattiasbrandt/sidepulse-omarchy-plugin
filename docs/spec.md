@@ -314,7 +314,10 @@ _Filled in during grilling, one entry per answered question._
   else made could turn an LED write into a write elsewhere, or hang the helper on a
   FIFO. A device that fails the check is left out and named in the popup. The read
   itself never follows a link, never blocks, and stops one byte past the limit. This
-  is a safety check on input, not a re-derived upstream rule (D4).
+  is a safety check on input, not a re-derived upstream rule (D4). The folder holding
+  the file must also be the user's own and writable by no one else, since upstream's
+  writer reopens the file by name and another account could swap in a link between
+  the check and the write; an error during the check names the device and skips it.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation

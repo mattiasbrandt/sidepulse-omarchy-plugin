@@ -717,14 +717,25 @@ def led_file_problem(target: str | Path) -> str | None:
     the LED write into a write to its target (upstream's writer follows it), a FIFO would block the
     helper's loop, and a huge file would be read every second (#55). A program never exceeds upstream's
     MAX_LED_BYTES.
+
+    The folder holding the file must be the user's own and writable by no one else: upstream's writer
+    opens the file again by name, so another local account able to write there could swap in a link
+    between this check and the write. A check that fails with an error names that error.
     """
     from sidepulse.device_writer import MAX_LED_BYTES
 
     path = Path(target)
     try:
+        folder = os.lstat(path.parent)
+        if not stat.S_ISDIR(folder.st_mode):
+            return f"{path.parent} is not a folder; leaving it alone"
+        if folder.st_uid != os.getuid() or folder.st_mode & 0o022:
+            return f"{path.parent} can be written by another account; leaving {path.name} alone"
         info = os.lstat(path)
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        return f"cannot check {path.name}: {exc}"
     if stat.S_ISLNK(info.st_mode):
         return f"{path.name} is a symbolic link; not reading or writing through it"
     if not stat.S_ISREG(info.st_mode):

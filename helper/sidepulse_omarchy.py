@@ -486,11 +486,12 @@ def change_settings(change: Any) -> None:
     half-written file could save the defaults over the user's settings (#55).
     The text is read once, checked, and handed to upstream as a private copy
     beside it; upstream saves into that copy, which then replaces the file in
-    one rename, keeping the file's mode.
+    one rename, keeping the file's mode. A settings.json that is a link (a
+    dotfiles checkout) keeps being one: the rename lands on the file it names.
     """
     from sidepulse.settings import default_settings_path, load_settings, save_settings
 
-    path = default_settings_path()
+    path = Path(os.path.realpath(default_settings_path()))
     path.parent.mkdir(parents=True, exist_ok=True)
     text = path.read_text() if path.exists() else None
     if text is not None and not isinstance(json.loads(text), dict):

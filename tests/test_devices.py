@@ -171,6 +171,21 @@ def test_a_half_written_settings_file_is_not_replaced_by_the_defaults(home, moun
     assert path.read_text() == '{"agent_list": {"idle_timeout_sec'
 
 
+def test_a_linked_settings_file_stays_a_link(home, mounts, tmp_path):
+    # Dotfile managers (stow, chezmoi symlink mode) link settings.json from a checkout.
+    device = device_by_name("PulseDot")
+    real = tmp_path / "dotfiles" / "settings.json"
+    real.parent.mkdir()
+    helper.change_settings(lambda s: s.with_device_brightness(device.id, 100))
+    path = settings_file(home)
+    real.write_text(path.read_text())
+    path.unlink()
+    path.symlink_to(real)
+    helper.change_settings(lambda s: s.with_device_brightness(device.id, 50))
+    assert path.is_symlink() and path.resolve() == real
+    assert load_settings().brightness_for_device(device.id) == 50
+
+
 def test_a_failed_change_leaves_the_settings_and_no_staging_file(home, mounts):
     device = device_by_name("PulseDot")
     helper.change_settings(lambda s: s.with_device_brightness(device.id, 100))

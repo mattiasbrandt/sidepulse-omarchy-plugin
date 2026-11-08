@@ -186,7 +186,9 @@ def test_a_peripheral_battery_is_not_the_machines(tmp_path):
 def test_a_peripheral_battery_does_not_hide_the_machines(tmp_path):
     make_supply(tmp_path, "BAT0", type="Battery", present="1", capacity="55", status="Discharging",
                 scope="System")
-    make_supply(tmp_path, "hidpp_battery_0", type="Battery", present="1", scope="Device", status="Discharging")
+    # Named to sort before BAT0, so the machine's battery is found only when the peripheral is skipped.
+    make_supply(tmp_path, "AAA_wireless_mouse_battery", type="Battery", present="1", scope="Device",
+                capacity="90", status="Discharging")
     battery = helper.read_battery(tmp_path)
     assert (battery.battery_present, battery.percent) == (True, 55)
 

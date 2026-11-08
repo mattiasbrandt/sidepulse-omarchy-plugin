@@ -307,6 +307,14 @@ _Filled in during grilling, one entry per answered question._
   the device dark and reports `power` (D14), never the last value. Off stays Off on
   exit. A crash mid-takeover is repaired by the next reconcile, which re-derives
   upstream's value from the remembered Display.
+  *Amended in #55:* before the helper reads or writes a device's LED file it checks
+  that the file is a regular file no longer than upstream's `MAX_LED_BYTES`, or
+  absent. Upstream's discovery takes any auto-mounted volume named like a SidePulse
+  or holding an LED file, and its writer follows symbolic links, so a stick someone
+  else made could turn an LED write into a write elsewhere, or hang the helper on a
+  FIFO. A device that fails the check is left out and named in the popup. The read
+  itself never follows a link, never blocks, and stops one byte past the limit. This
+  is a safety check on input, not a re-derived upstream rule (D4).
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation

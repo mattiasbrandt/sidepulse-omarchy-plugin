@@ -77,6 +77,7 @@ import re
 import select
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -158,7 +159,7 @@ REQUIRED_NAMES = {
     },
     "service": {"sidepulse.service_launch": ("service_is_running",)},
     "devices": {
-        "sidepulse.device_writer": ("discover_devices", "write_led_program"),
+        "sidepulse.device_writer": ("discover_devices", "write_led_program", "MAX_LED_BYTES"),
         "sidepulse.settings": ("load_settings", "save_settings"),
         "sidepulse.led_status": ("led_count_for_target", "builtin_animation_program"),
     },
@@ -669,16 +670,59 @@ def shown_colour(device: Device) -> str | None:
     """The first colour of the program the device holds now: what its LEDs
     show, which can differ from the menu-bar legend colour (Done is cyan on
     the device, green in the legend). None when dark or holding no program."""
-    match = COLOUR.search(shown_program(device) or "")
+    return colour_of(shown_program(device))
+
+
+def colour_of(program: str | None) -> str | None:
+    """The first colour in an LED program, as #RRGGBB; None when it has none."""
+    match = COLOUR.search(program or "")
     return "#" + match.group(1).upper() if match else None
 
 
-def shown_program(device: Device) -> str | None:
-    """The LED program the device holds now; None when it holds none."""
+def led_file_problem(target: str | Path) -> str | None:
+    """Why a device's LED file must not be read or written, or None when it is a regular file or absent.
+
+    Any auto-mounted volume whose name looks like a SidePulse, or that holds an LED file, is a device to
+    upstream's discovery, so the file can come from a stick someone else made: a symbolic link would turn
+    the LED write into a write to its target (upstream's writer follows it), a FIFO would block the
+    helper's loop, and a huge file would be read every second (#55). A program never exceeds upstream's
+    MAX_LED_BYTES.
+    """
+    from sidepulse.device_writer import MAX_LED_BYTES
+
+    path = Path(target)
     try:
-        return Path(device.target).read_text().strip()
+        info = os.lstat(path)
     except FileNotFoundError:
         return None
+    if stat.S_ISLNK(info.st_mode):
+        return f"{path.name} is a symbolic link; not reading or writing through it"
+    if not stat.S_ISREG(info.st_mode):
+        return f"{path.name} is not a regular file; leaving it alone"
+    if info.st_size > MAX_LED_BYTES:
+        return f"{path.name} is {info.st_size} bytes, more than an LED program's {MAX_LED_BYTES}; leaving it alone"
+    return None
+
+
+def shown_program(device: Device) -> str | None:
+    """The LED program the device holds now; None when it holds none.
+
+    Read without following a link or blocking on a FIFO, and at most one byte past upstream's limit, so a
+    file swapped after discovery (led_file_problem) cannot hang or flood the helper. Raises OSError for a
+    file that is not a regular one or is too long."""
+    from sidepulse.device_writer import MAX_LED_BYTES
+
+    try:
+        fd = os.open(device.target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError(f"{Path(device.target).name} is not a regular file")
+        data = handle.read(MAX_LED_BYTES + 1)
+    if len(data) > MAX_LED_BYTES:
+        raise OSError(f"{Path(device.target).name} is longer than an LED program's {MAX_LED_BYTES} bytes")
+    return data.decode("utf-8", errors="replace").strip()
 
 
 def icon_device(devices: list[Device]) -> Device | None:
@@ -1950,18 +1994,28 @@ class Helper:
         if not self.capabilities.get("devices", {}).get("ok"):
             self.device_count = None
             return
+        unsafe = False
         try:
-            self.devices = discover_device_rows()
+            found = discover_device_rows()
         except OSError as exc:
             self.report("devices", f"cannot look for SidePulse devices: {exc}")
             self.devices = []
             self.device_count = None
         else:
+            # A device whose LED file is not a plain, short file is left alone and named in the popup (#55).
+            self.devices = []
+            for device in found:
+                problem = led_file_problem(device.target)
+                if problem is None:
+                    self.devices.append(device)
+                else:
+                    unsafe = True
+                    self.report("devices", f"{device.name}: {problem}")
             from sidepulse.device_writer import DeviceWriteError
             from sidepulse.settings import load_settings
 
             self.device_count = len(self.devices)
-            failed = False
+            failed = unsafe
             # Nothing is reconciled until the widget has sent its remembered displays.
             pending = self.devices if self.displays is not None else []
             settings = load_settings()
@@ -1981,7 +2035,7 @@ class Helper:
 
         settings = load_settings()
         self.device_programs = {
-            device.id: full_brightness_program(shown_program(device), settings.brightness_for_device(device.id))
+            device.id: full_brightness_program(self.read_program(device), settings.brightness_for_device(device.id))
             for device in self.devices
         }
         self.refresh_bar()
@@ -1989,6 +2043,17 @@ class Helper:
         if force or event != self.last_devices:
             self.last_devices = event
             self.emit(event)
+
+    def read_program(self, device: Device) -> str | None:
+        """shown_program, with a file that turned unsafe since discovery reported, not raised."""
+        try:
+            return shown_program(device)
+        except OSError as exc:
+            self.report("devices", f"{device.name}: {exc}")
+            return None
+
+    def read_colour(self, device: Device) -> str | None:
+        return colour_of(self.read_program(device))
 
     def devices_event(self) -> dict[str, Any]:
         from sidepulse.settings import load_settings
@@ -2005,7 +2070,7 @@ class Helper:
                 "led_count": device.led_count,
                 "display": display_of(self.displays or {}, device.id, self.battery_offered),
                 "percent": round(settings.brightness_for_device(device.id) * 100 / 255),
-                "colour": shown_colour(device),
+                "colour": self.read_colour(device),
             })
         return {"type": "devices", "items": items}
 

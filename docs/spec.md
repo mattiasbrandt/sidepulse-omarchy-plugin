@@ -255,6 +255,13 @@ _Filled in during grilling, one entry per answered question._
   `session_resume_command` run as `xdg-terminal-exec -- sh -c <command>` in the
   session cwd. Only the helper's own latest list is searched, so a session that
   has dropped out of it answers "no longer listed".
+  *Amended in #55:* the command travels in the environment (`SIDEPULSE_RESUME`),
+  not in argv: the terminal is started as `xdg-terminal-exec -- sh -c <fixed script>`,
+  and the script runs the variable, unsets it before the agent starts, and fails
+  with a message held on screen when the variable did not arrive. A terminal keeps
+  its argv for the window's life and any local account can read it, while
+  `/proc/<pid>/environ` is the owner's alone (marketplace review). A tmux client
+  attaches by session id (`$N`), not by name, for the same reason.
   *Amended after #12 (daily use):* the list leaves out a finished (Done) session
   whose folder no longer exists, such as a deleted worktree: it cannot be resumed,
   and Codex review runs in removed worker worktrees crowded the ten rows. It is

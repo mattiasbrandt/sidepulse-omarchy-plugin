@@ -5,6 +5,7 @@ Commands and terminals are fakes: nothing here focuses a window or starts a term
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -34,12 +35,14 @@ class FakeRun:
 class FakeSpawn:
     def __init__(self, error: Exception | None = None) -> None:
         self.started: list[tuple[list[str], str | None]] = []
+        self.envs: list[dict[str, str] | None] = []
         self.error = error
 
-    def __call__(self, argv: list[str], cwd: str | None) -> None:
+    def __call__(self, argv: list[str], cwd: str | None, env: dict[str, str] | None = None) -> None:
         if self.error is not None:
             raise self.error
         self.started.append((argv, cwd))
+        self.envs.append(env)
 
 
 def status(provider: str = "claude", session_id: str | None = SESSION) -> AgentStatus:
@@ -69,8 +72,36 @@ def test_stopped_session_resumes_with_upstreams_command_in_a_terminal(provider, 
     ok, message = helper.perform_open({"action": "resume"}, status(provider), FakeRun(), spawn)
     assert ok is True
     assert session_resume_command(status(provider)) == expected
-    assert spawn.started == [(["xdg-terminal-exec", "--", "sh", "-c", expected], CWD)]
+    assert spawn.started == [(["xdg-terminal-exec", "--", "sh", "-c", helper.RESUME_SCRIPT], CWD)]
+    assert spawn.envs == [{helper.RESUME_ENV: expected}]
     assert "Resuming" in message
+
+
+def test_the_resume_command_line_holds_neither_the_project_nor_the_session():
+    # A terminal keeps its argv for the window's life and any local account can read it (#55).
+    spawn = FakeSpawn()
+    helper.perform_open({"action": "resume"}, status(), FakeRun(), spawn)
+    [(argv, _)] = spawn.started
+    assert SESSION not in " ".join(argv) and CWD not in " ".join(argv)
+
+
+def run_resume_script(tmp_path, env):
+    """RESUME_SCRIPT under a real sh, its stdin closed as a terminal that the user closes."""
+    return subprocess.run(["sh", "-c", helper.RESUME_SCRIPT], cwd=tmp_path, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, timeout=10, env={"PATH": os.environ["PATH"], **env})
+
+
+def test_the_resume_script_runs_the_command_from_the_environment_without_passing_it_on(tmp_path):
+    command = f"cd {tmp_path} && printf '%s' \"${{{helper.RESUME_ENV}-unset}}\" > ran"
+    done = run_resume_script(tmp_path, {helper.RESUME_ENV: command})
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "ran").read_text() == "unset"
+
+
+def test_the_resume_script_fails_loudly_when_the_command_did_not_arrive(tmp_path):
+    done = run_resume_script(tmp_path, {})
+    assert done.returncode == 1
+    assert "did not reach this terminal" in done.stderr
 
 
 def test_session_without_an_id_cannot_resume():
@@ -194,6 +225,11 @@ def test_a_terminal_that_keeps_running_is_left_running():
     started = time.monotonic()
     helper.spawn_detached(["sleep", "5"], None)
     assert time.monotonic() - started < helper.SPAWN_SETTLE_SECONDS + 1
+
+
+def test_spawn_adds_the_given_variables_to_the_environment():
+    helper.spawn_detached(["sh", "-c", '[ "$PROBE" = yes ] || { echo "PROBE missing" >&2; exit 3; }'], None,
+                          {"PROBE": "yes"})
 
 
 def test_a_terminal_that_hands_off_and_exits_cleanly_is_success():

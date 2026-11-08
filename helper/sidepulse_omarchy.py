@@ -1262,13 +1262,24 @@ def resolve(provider: str, session_id: str, cwd: str | None, proc: Proc | None =
 
 # --- Open a session (D8): act on the lookup's plan ---------------------------
 
-Spawn = Callable[[list[str], str | None], None]
+Spawn = Callable[..., None]  # (argv, cwd, env=None): env adds variables to the helper's environment
+
+# The resume command travels in the environment, not in argv: a terminal keeps its command line for as long
+# as the window is open, and any local account can read that (/proc/<pid>/cmdline), while /proc/<pid>/environ
+# is the owner's alone (#55). The shell refuses to run when the variable did not arrive (a terminal that
+# drops the environment), keeps the message on screen until Enter, and keeps the variable from the agent.
+RESUME_ENV = "SIDEPULSE_RESUME"
+RESUME_SCRIPT = (
+    f'[ -n "${RESUME_ENV}" ] || {{ echo "SidePulse: the resume command did not reach this terminal." >&2;'
+    f' printf "Press Enter to close. "; read -r _; exit 1; }};'
+    f' resume=${RESUME_ENV}; unset {RESUME_ENV}; eval "$resume"'
+)
 
 
 SPAWN_SETTLE_SECONDS = 1.0
 
 
-def spawn_detached(argv: list[str], cwd: str | None) -> None:
+def spawn_detached(argv: list[str], cwd: str | None, env: dict[str, str] | None = None) -> None:
     """Starts a terminal (or any command) that outlives the helper.
 
     Raises CommandFailed when it cannot start, or when it exits with an error
@@ -1281,7 +1292,8 @@ def spawn_detached(argv: list[str], cwd: str | None) -> None:
     with tempfile.TemporaryFile() as err:
         try:
             child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                     stderr=err, start_new_session=True)
+                                     stderr=err, start_new_session=True,
+                                     env={**os.environ, **env} if env else None)
         except OSError as exc:
             raise CommandFailed(f"{argv[0]} cannot start: {exc}") from exc
         try:
@@ -1342,7 +1354,7 @@ def perform_open(plan: dict, status: Any, run: Run, spawn: Spawn) -> tuple[bool,
         if command is None:
             return False, f"{status.display_name} has no session id to resume."
         try:
-            spawn(["xdg-terminal-exec", "--", "sh", "-c", command], status.cwd)
+            spawn(["xdg-terminal-exec", "--", "sh", "-c", RESUME_SCRIPT], status.cwd, {RESUME_ENV: command})
         except CommandFailed as exc:
             return False, f"Could not resume {status.display_name}: {exc}"
         return True, f"Resuming {status.display_name} in a terminal."

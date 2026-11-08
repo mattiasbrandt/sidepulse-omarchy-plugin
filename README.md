@@ -294,8 +294,9 @@ What it touches at run time:
   the sleep lock while Keep awake wants it, and ends with the helper; and
   `busctl get-property` for logind's `LidClosed`, read only.
 - **Developers only:** `scripts/live-check.sh` is not run by users. It copies the
-  working tree into `~/.config/omarchy/plugins`, backs up `shell.json` to
-  `/tmp`, runs `omarchy plugin` and `omarchy restart shell`, and checks
+  working tree into `~/.config/omarchy/plugins`, backs up `shell.json` to a
+  private directory (`$XDG_RUNTIME_DIR/sidepulse-live-check`, mode 0700, the copy
+  0600), runs `omarchy plugin` and `omarchy restart shell`, and checks
   `systemctl --user is-active sidepulse.service`.
 
 ## Credits

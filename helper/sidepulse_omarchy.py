@@ -104,7 +104,8 @@ NOTIFY_BODY = "A session is waiting for you. Open it from here or from the SideP
 # Upstream's agent names as the popup writes them (GLOSSARY: Agent).
 PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "junie": "Junie"}
 NOTIFY_REASON = "notify-send is not installed; the Ask notifications need it (libnotify)"
-INSTALL_COMMAND = "curl -fsSL https://sidepulse.io/setup.sh | bash"
+# Where SidePulse's own setup steps live. The popup points there rather than showing a download piped to a shell.
+INSTALL_PAGE = "https://sidepulse.io/setup"
 # A device's Display (D9). Upstream stores only Agent or Manual ("custom") on
 # Linux, so Battery and Off hold the device in Manual while the helper drives
 # it (Battery, D10) or the user keeps it dark (Off).
@@ -392,7 +393,7 @@ def setup_event(*, installed: bool, service_running: bool | None, device_count: 
         items.append({
             "id": "install",
             "title": "SidePulse is not installed",
-            "detail": f"Install it with: {INSTALL_COMMAND}",
+            "detail": f"Install it with SidePulse's own installer; see {INSTALL_PAGE}",
             "action": None,
         })
     if service_running is False:

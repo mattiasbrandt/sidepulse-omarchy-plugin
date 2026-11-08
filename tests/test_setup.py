@@ -27,10 +27,13 @@ def test_stopped_service_offers_start_service_and_nothing_else():
     assert event["items"][0]["action_label"] == "Start service"
 
 
-def test_install_item_shows_the_official_installer_and_has_no_action():
+def test_install_item_points_to_the_official_setup_page_and_has_no_action():
     event = helper.setup_event(installed=False, service_running=None, device_count=None)
     assert ids(event) == ["install"]
-    assert "https://sidepulse.io/setup.sh" in event["items"][0]["detail"]
+    detail = event["items"][0]["detail"]
+    assert "https://sidepulse.io/setup" in detail
+    # A download piped to a shell is what the marketplace's baseline flags; the page holds the steps.
+    assert "curl" not in detail and "| bash" not in detail
     assert event["items"][0]["action"] is None
 
 

@@ -458,8 +458,9 @@ _Filled in during grilling, one entry per answered question._
   service" runs `sidepulse service start`), no device ("plug in a SidePulse").
   Agent State keeps working without a device.
   *Amended in #10:* the helper's `setup` event lists the items in that order
-  (`install`, `service`, `device`). The install item shows upstream's installer
-  line (`curl -fsSL https://sidepulse.io/setup.sh | bash`, from its README); the
+  (`install`, `service`, `device`). The install item points to SidePulse's setup page
+  (`https://sidepulse.io/setup`; *amended in #55*, it showed the `curl … | bash`
+  installer line, a pattern the marketplace flags); the
   service item carries the `start-service` action, which runs
   `python -I -m sidepulse service start` in the SidePulse venv. A missing venv
   is reported by the shell, since no helper can run there.

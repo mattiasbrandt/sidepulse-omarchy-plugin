@@ -34,7 +34,7 @@ Panel {
   readonly property var installRow: ({
     id: "install",
     title: "SidePulse is not installed",
-    detail: "Install it with: curl -fsSL https://sidepulse.io/setup.sh | bash",
+    detail: "Install it with SidePulse's own installer; see https://sidepulse.io/setup",
     action: null
   })
   readonly property var setupRows: HelperProcess.notInstalled ? [installRow] : HelperProcess.setupItems

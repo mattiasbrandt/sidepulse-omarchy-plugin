@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.2...v0.9.3) (2026-11-08)
+
+
+### Bug Fixes
+
+* **helper:** keep session details off command lines ([#56](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/56)) ([f06ef8b](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/f06ef8b94b80cc022f2c146c484971752fe0fe9b))
+
 ## [0.9.2](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.1...v0.9.2) (2026-10-11)
 
 

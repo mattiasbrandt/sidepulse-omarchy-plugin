@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import errno
 import importlib
 import importlib.metadata
 import json
@@ -164,7 +165,7 @@ REQUIRED_NAMES = {
         "sidepulse.led_status": ("led_count_for_target", "builtin_animation_program"),
     },
     "hooks": {
-        "sidepulse.providers": ("detect_provider_configs", "HOOK_PROVIDERS"),
+        "sidepulse.providers": ("detect_provider_configs", "HOOK_PROVIDERS", "candidate_state_dirs"),
         "sidepulse.cli": ("sidepulse_main",),
     },
     "hook_log": {
@@ -583,6 +584,58 @@ def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str
     )
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output or f"exit {result.returncode}"
+
+
+def make_private(path: Path, folder: bool) -> str | None:
+    """Take group and other access off the user's own folder or file; None when done or absent.
+
+    Opened without following a link, so a link is left alone (and named), and changed through the open
+    descriptor, so what is changed is what was checked."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_DIRECTORY if folder else os.O_NONBLOCK)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):  # a link fails ENOTDIR under O_DIRECTORY
+            kind = "a symbolic link" if os.path.islink(path) else "not a folder"
+            return f"{path} is {kind}; leaving it alone"
+        return f"cannot make {path} private: {exc}"
+    try:
+        info = os.fstat(fd)
+        if not (stat.S_ISDIR(info.st_mode) if folder else stat.S_ISREG(info.st_mode)):
+            return f"{path} is not a {'folder' if folder else 'regular file'}; leaving it alone"
+        if info.st_uid != os.getuid():
+            return f"{path} belongs to another account; leaving it alone"
+        if info.st_mode & 0o077:
+            os.fchmod(fd, stat.S_IMODE(info.st_mode) & 0o700)
+    except OSError as exc:
+        return f"cannot make {path} private: {exc}"
+    finally:
+        os.close(fd)
+    return None
+
+
+def keep_hook_logs_private(home: Path | None = None) -> list[str]:
+    """Close SidePulse's hook logs to other accounts (#58); the problems found, if any.
+
+    Upstream's hook installer and hook create the agent-monitor state folder and its logs with the
+    process umask, and the logs hold the agents' complete prompts. A folder the user alone can enter
+    keeps every file in it private, those upstream creates later included, so the state folder becomes
+    700 (each folder upstream's processes may resolve). A hook log configured outside it becomes 600;
+    its folder is someone else's choice and is left alone.
+    """
+    from sidepulse.providers import candidate_state_dirs
+
+    folders = candidate_state_dirs(home)
+    problems = [problem for folder in folders if (problem := make_private(folder, folder=True))]
+    logs = {Path(log) for row in hooks_event(home)["providers"] for log in row.get("log_paths", ())}
+    for log in sorted(logs):
+        if not any(folder in log.parents for folder in folders):
+            problem = make_private(log, folder=False)
+            if problem:
+                problems.append(problem)
+    return problems
 
 
 def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict[str, Any]:
@@ -1920,6 +1973,8 @@ class Helper:
         for feature, cap in self.capabilities.items():
             if not cap["ok"]:
                 self.error(feature, cap["reason"])
+        # Hooks enabled with an earlier plugin or upstream's CLI left their logs as umask made them (#58).
+        self.keep_hook_logs_private()
         if self.capabilities["state"]["ok"]:
             from sidepulse.ipc import default_latest_state_path
 
@@ -2512,10 +2567,23 @@ class Helper:
             ok, message = run_hook_command(action, provider, sys.executable)
         except (OSError, subprocess.SubprocessError) as exc:
             ok, message = False, f"cannot run the SidePulse CLI: {exc}"
+        if action == "install":  # also after a failed one: it may have created the logs before failing
+            self.keep_hook_logs_private()
         self.emit({"type": "result", "command": f"hooks-{action}", "provider": provider, "ok": ok,
                    "message": message})
         self.refresh_hooks(force=True)
         self.refresh_log(force=True)
+
+    def keep_hook_logs_private(self) -> None:
+        """keep_hook_logs_private, each problem reported as a hooks error (#58)."""
+        if not self.capabilities.get("hooks", {}).get("ok"):
+            return
+        try:
+            problems = keep_hook_logs_private()
+        except (OSError, ValueError) as exc:
+            problems = [f"cannot check the hook logs' permissions: {exc}"]
+        for problem in problems:
+            self.error("hooks", f"hook logs not made private: {problem}")
 
     # --- Notify when a session asks (D20) ---
 

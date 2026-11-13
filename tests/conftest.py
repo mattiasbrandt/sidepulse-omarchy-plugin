@@ -4,6 +4,10 @@ Every test runs with a fake `systemd-inhibit` first on PATH. It logs its pid and
 argv, drops the options and execs the command, as the real one runs its
 command, so no test can take a real sleep lock (D11) and a test can check that
 the lock's child ended.
+
+Every test also starts with HOME and the XDG config and state dirs in a scratch
+folder: the helper changes files there when it starts (#58), and a test that
+does not set its own must never reach the user's real ones.
 """
 
 from __future__ import annotations
@@ -37,3 +41,13 @@ def fake_systemd_inhibit(tmp_path_factory: pytest.TempPathFactory, monkeypatch: 
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_INHIBIT_LOG", str(log))
     return log
+
+
+@pytest.fixture(autouse=True)
+def scratch_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A private HOME with XDG config and state dirs under it; tests may set their own over it."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local" / "state"))
+    return home

@@ -431,6 +431,15 @@ _Filled in during grilling, one entry per answered question._
   end). Problems (D14) sit above the section header, visible when it is
   collapsed. Presets are in upstream's units: idle 15 min to 4 h, retention 1 h
   to 7 days (`helper/settings.mjs`).
+  *Amended in #58:* upstream's hook installer and hook create the agent-monitor
+  state folder and the agents' logs, which hold complete prompts, with the
+  process umask (marketplace review). After a hook install from the popup, and
+  whenever the helper starts, the helper takes group and other access off each
+  state folder upstream may resolve (`candidate_state_dirs`), so every file in
+  it, those created later included, is the user's alone; a hook log configured
+  outside it loses group and other access, and its folder is left alone. A link,
+  a folder or file owned by another account, or an error is reported, not
+  followed. The files are upstream's; the plugin only closes them.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.

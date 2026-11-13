@@ -284,6 +284,13 @@ What it touches at run time:
   edits `~/.claude/settings.json`, `~/.codex/config.toml` (including Codex's trust
   entries for those hooks), `~/.grok/hooks/`, `~/.cursor/hooks.json` and
   `~/.junie/config.json`. SidePulse's code writes a backup beside a config it changes.
+- **Keeps the hook logs private.** SidePulse's hooks append each agent event,
+  prompts included, to logs in `~/.local/state/sidepulse/agent-monitor/`, and
+  SidePulse creates that folder and its logs with your umask, often readable by
+  other accounts. After a hook install from Settings, and whenever the helper
+  starts, the helper makes that folder `700` (a hook log kept elsewhere becomes
+  `600`). It leaves a link, or anything owned by another account, alone and names
+  it in the popup.
 - **Runs commands**, each only where the feature is named above:
   `systemctl --user is-active sidepulse.service` (the Setup check);
   `python -I -m sidepulse service start` in SidePulse's venv, only when you choose

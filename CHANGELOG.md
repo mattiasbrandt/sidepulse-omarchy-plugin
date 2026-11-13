@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.4](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.3...v0.9.4) (2026-11-13)
+
+
+### Bug Fixes
+
+* **helper:** keep SidePulse's hook logs private to the user ([#59](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/59)) ([d4a9c65](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/d4a9c6526f046b803784d6423baa91951e810ddb))
+
 ## [0.9.3](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.2...v0.9.3) (2026-11-08)
 
 

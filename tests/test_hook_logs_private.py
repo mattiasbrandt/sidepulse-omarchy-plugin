@@ -27,6 +27,9 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     (tmp_path / "home").mkdir()
+    # pytest's scratch paths are long enough to send upstream's relay socket to /tmp; that check has its
+    # own tests below.
+    monkeypatch.setattr(helper, "relay_socket_problems", lambda folders: [])
     return tmp_path
 
 
@@ -232,4 +235,70 @@ def test_a_problem_is_shown_once_and_cleared_when_it_is_gone(home, monkeypatch):
     h.keep_hook_logs_private()
     events = [json.loads(line) for line in out.getvalue().splitlines()]
     assert {"type": "clear", "feature": "hook_privacy"} in events
+    assert mode(state_dir(home)) == 0o700
+
+
+def test_a_relay_socket_sent_to_tmp_is_named():
+    long = Path("/home") / ("u" * 60) / ".local" / "state" / "sidepulse" / "agent-monitor"
+    [problem] = helper.relay_socket_problems((long,))
+    assert "/tmp/" in problem and "another account" in problem
+
+
+def test_a_relay_socket_in_the_state_folder_is_fine():
+    assert helper.relay_socket_problems((Path("/home/u/.local/state/sidepulse/agent-monitor"),)) == []
+
+
+def test_upstreams_cli_runs_with_a_private_umask(home):
+    # The installer's backup of a 600 agent config, and the folder and log it creates, are the user's alone.
+    settings = home / "home" / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-test"}}\n')
+    settings.chmod(0o600)
+    old = os.umask(0o022)
+    try:
+        install_claude_hooks()
+    finally:
+        os.umask(old)
+    [backup] = [p for p in settings.parent.iterdir() if ".bak." in p.name]
+    assert mode(backup) == 0o600
+    assert mode(state_dir(home)) == 0o700
+    assert mode(state_dir(home) / "claude.jsonl") == 0o600
+    assert mode(settings) == 0o600
+
+
+def test_existing_config_backups_lose_group_and_other_access(home):
+    claude = home / "home" / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text("{}\n")
+    backup = claude / "settings.json.bak.20261010T212138Z"
+    backup.write_text("{}\n")
+    backup.chmod(0o644)
+    other = claude / "settings.json.bak"  # not upstream's name: someone else's file
+    other.write_text("{}\n")
+    other.chmod(0o644)
+    started()
+    assert mode(backup) == 0o600
+    assert mode(other) == 0o644
+
+
+def test_another_tools_redirect_target_is_not_taken_for_a_sidepulse_log(home):
+    shared = home / "home" / "shared.log"
+    settings = home / "home" / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"matcher": "*", "hooks": [
+        {"type": "command", "command": f"other-tool >> {shared}"}]}]}}))
+    assert str(shared) in helper.hooks_event()["providers"][1]["log_paths"]  # upstream lists it
+    started()
+    assert not shared.exists()
+    assert not state_dir(home).exists()
+
+
+def test_the_state_folder_is_created_when_the_agent_log_lives_elsewhere(home):
+    # The hook writes its audit log (event-status.jsonl, prompt previews) to the state folder regardless.
+    log = home / "home" / "logs" / "claude.jsonl"
+    settings = home / "home" / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    command = f"python hook_entry.py --provider claude --log {log}"
+    settings.write_text(json.dumps({"hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]}}))
+    started()
     assert mode(state_dir(home)) == 0o700

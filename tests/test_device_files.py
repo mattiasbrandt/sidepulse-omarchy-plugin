@@ -142,3 +142,26 @@ def test_an_error_while_checking_names_the_device_and_keeps_the_helper(world, mo
 
 def test_an_absent_led_file_is_fine(world):
     assert helper.led_file_problem(Path(world.led)) is None
+
+
+@pytest.mark.parametrize("name", ["STATUS.TXT", "setup.html"])
+def test_a_fifo_control_file_leaves_the_device_alone(world, name):
+    # Upstream's read-only fallback reads these with a plain open(): a FIFO would block the helper (#62).
+    world.led.write_text("brightness 128\n")
+    os.mkfifo(world.led.parent / name)
+    set_off(world)
+    assert world.dot_id not in listed_ids(world)
+    assert any(name in message and "not a regular file" in message for message in device_errors(world.out))
+
+
+@pytest.mark.parametrize("name", ["STATUS.TXT", "setup.html"])
+def test_a_linked_control_file_leaves_the_device_alone(world, tmp_path, name):
+    (tmp_path / "elsewhere").write_text("x")
+    (world.led.parent / name).symlink_to(tmp_path / "elsewhere")
+    assert "symbolic link" in helper.led_file_problem(world.led)
+
+
+def test_plain_control_files_are_fine(world):
+    (world.led.parent / "STATUS.TXT").write_text("app_version 1.2.0\n")
+    (world.led.parent / "setup.html").write_bytes(b"\0" * 9728)
+    assert helper.led_file_problem(world.led) is None

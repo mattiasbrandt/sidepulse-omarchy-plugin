@@ -93,6 +93,24 @@ PROTOCOL_VERSION = 1
 HELPER_VERSION = "dev"
 TICK_SECONDS = 1.0
 SETUP_EVERY_TICKS = 5
+
+# The umask upstream's CLI runs with when the plugin starts it (#62): every file it creates (agent config
+# backups, the hook-log folder and logs, the service unit) is the user's alone. A config it rewrites in
+# place keeps its own mode.
+UPSTREAM_CLI_UMASK = 0o077
+
+# What marks a hook command as SidePulse's own: upstream's markers (providers.py, the Cursor and Junie
+# detectors). Upstream lists the `--log` and `>>` targets of every hook, other tools' included.
+SIDEPULSE_HOOK_MARKERS = ("hook_entry.py", "agent-monitor hook-log", "sidepulse.cursor_hook")
+
+# The name upstream's backup_file gives a backup: <config name>.bak.<UTC stamp>.
+BACKUP_STAMP = re.compile(r"\.bak\.\d{8}T\d{6}Z")
+
+# The device files upstream's read-only LED fallback opens besides LEDS.LED (readonly_control.py).
+DEVICE_CONTROL_FILES = ("STATUS.TXT", "setup.html")
+
+# A session id as agents write them (UUIDs and the like); never a path or a dots-only name.
+SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 SERVICE_START_TIMEOUT_SECONDS = 60.0
 # Hook log rows the popup keeps (newest first), and how long one hook command may run.
 HOOK_LOG_ROWS = 8
@@ -428,6 +446,7 @@ def start_service(python: str) -> tuple[bool, str]:
             text=True,
             timeout=SERVICE_START_TIMEOUT_SECONDS,
             check=False,
+            umask=UPSTREAM_CLI_UMASK,
         )
     except subprocess.TimeoutExpired:
         return False, f"sidepulse service start did not finish within {SERVICE_START_TIMEOUT_SECONDS} s"
@@ -572,6 +591,9 @@ def hooks_event(home: Path | None = None) -> dict[str, Any]:
 def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str]:
     """`agent-monitor install|uninstall <provider>` in the SidePulse venv (D4: hooks go through the CLI).
 
+    Run with UPSTREAM_CLI_UMASK: upstream creates its files with the process umask, a backup copy of
+    an agent config (which may hold API keys) and the hook-log folder among them.
+
     Installing or removing a hook edits the user's agent config, so this runs
     only where the caller means it; tests run it under a scratch HOME.
     """
@@ -581,6 +603,7 @@ def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str
         text=True,
         timeout=HOOK_COMMAND_TIMEOUT_SECONDS,
         check=False,
+        umask=UPSTREAM_CLI_UMASK,
     )
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output or f"exit {result.returncode}"
@@ -634,28 +657,88 @@ def create_private(path: Path, folder: bool) -> str | None:
     return None
 
 
+def sidepulse_hooks(row: dict[str, Any]) -> tuple[bool, list[Path]]:
+    """Whether an agent's config holds SidePulse's own hooks, and the logs those hooks write.
+
+    Upstream's log_paths are the `--log` and `>>` targets of every hook in the config, so a log is
+    taken as SidePulse's only when it appears on a line of the config that carries a SidePulse hook.
+    Upstream writes each hook command on one line (JSON strings, TOML values)."""
+    try:
+        text = Path(row["config_path"]).read_text(errors="replace")
+    except (KeyError, OSError):
+        return False, []
+    lines = [line for line in text.splitlines() if any(marker in line for marker in SIDEPULSE_HOOK_MARKERS)]
+    return bool(lines), [Path(log) for log in row.get("log_paths", ()) if any(log in line for line in lines)]
+
+
+def config_backups(row: dict[str, Any]) -> list[tuple[Path, bool]]:
+    """Upstream's backups of an agent config: (path, is_folder). Beside the config, and for Grok in
+    upstream's backup folder (install.py backup_file, grok_hook_backup_dir)."""
+    config = Path(row.get("config_path") or "")
+    if not config.name:
+        return []
+    found: list[tuple[Path, bool]] = []
+    try:
+        found += [(path, False) for path in config.parent.iterdir()
+                  if path.name.startswith(config.name) and BACKUP_STAMP.fullmatch(path.name[len(config.name):])]
+    except OSError:
+        pass  # no folder, no backups
+    if row.get("provider") == "grok":
+        found.append((config.parent.parent / "sidepulse-hook-backups", True))
+    return found
+
+
+def relay_socket_problems(folders: tuple[Path, ...]) -> list[str]:
+    """Upstream's relay socket leaves the state folder for a fixed name in /tmp when the folder's path is
+    long (relay.py relay_socket_path_for_state_dir): another account could take that name and receive the
+    hook events. Only upstream can move it; the helper names it. Skipped when upstream has no such rule."""
+    try:
+        from sidepulse.relay import relay_socket_path_for_state_dir
+    except ImportError:
+        return []
+    problems = []
+    for folder in folders:
+        socket = relay_socket_path_for_state_dir(folder)
+        if folder not in socket.parents:
+            problems.append(f"SidePulse's hook relay socket for {folder} is {socket}, a name in a shared folder "
+                            "another account could take; a shorter XDG_STATE_HOME keeps it in the state folder")
+    return problems
+
+
 def keep_hook_logs_private(home: Path | None = None) -> list[str]:
-    """Close SidePulse's hook logs to other accounts (#58, #62); the problems found, if any.
+    """Close SidePulse's hook logs and config backups to other accounts (#58, #62); the problems found.
 
     Upstream's hook installer and hook create the agent-monitor state folder and its logs with the
     process umask, and the logs hold the agents' complete prompts. A folder the user alone can enter
     keeps every file in it private, those upstream creates later included, so each state folder upstream's
-    processes may resolve becomes 700. While an agent's SidePulse hooks are installed, a missing folder its
-    log goes to is created 700 first, so upstream's hook never creates it with the umask. A hook log
-    configured outside the state folders is created empty at 600 when missing, and loses group and
-    other access when present; its folder is someone else's choice and is left alone.
+    processes may resolve becomes 700. While any agent's SidePulse hooks are installed, a missing state
+    folder is created 700 first, so upstream's hook never creates it with the umask: the hook always
+    writes its audit log (event-status.jsonl, with prompt previews) there, wherever the agent's own log
+    goes. A SidePulse hook log configured outside the state folders is created empty at 600 when missing,
+    and loses group and other access when present; its folder is someone else's choice and is left alone.
+    Upstream's backups of agent configs lose group and other access too.
     """
     from sidepulse.providers import candidate_state_dirs
 
     folders = candidate_state_dirs(home)
-    # log_paths are listed only for agents whose SidePulse hooks are installed (hooks_event).
-    logs = sorted({Path(log) for row in hooks_event(home)["providers"] for log in row.get("log_paths", ())})
-    outside = [log for log in logs if not any(folder in log.parents for folder in folders)]
-    needed = [folder for folder in folders if any(folder in log.parents for log in logs)]
-    problems = [problem for folder in needed if (problem := create_private(folder, folder=True))]
-    problems += [problem for log in outside if (problem := create_private(log, folder=False))]
+    rows = hooks_event(home)["providers"]
+    installed = False
+    logs: set[Path] = set()
+    backups: list[tuple[Path, bool]] = []
+    for row in rows:
+        has_hooks, row_logs = sidepulse_hooks(row)
+        installed = installed or has_hooks
+        logs.update(row_logs)
+        backups += config_backups(row)
+    outside = [log for log in sorted(logs) if not any(folder in log.parents for folder in folders)]
+    problems: list[str] = []
+    if installed:
+        problems += [problem for folder in folders if (problem := create_private(folder, folder=True))]
+        problems += [problem for log in outside if (problem := create_private(log, folder=False))]
+        problems += relay_socket_problems(folders)
     problems += [problem for folder in folders if (problem := make_private(folder, folder=True))]
     problems += [problem for log in outside if (problem := make_private(log, folder=False))]
+    problems += [problem for path, folder in backups if (problem := make_private(path, folder=folder))]
     return problems
 
 
@@ -717,7 +800,7 @@ def notification_text(status: Any) -> tuple[str, str]:
     The project and the agent's question stay out: they would sit in notify-send's
     command line, which any local account can read while the notice waits (#55).
     """
-    name = PROVIDER_NAMES.get(status.provider.lower(), status.provider)
+    name = PROVIDER_NAMES.get(str(status.provider).lower(), "An agent")  # never a name from the file
     return f"{name} needs attention", NOTIFY_BODY
 
 
@@ -805,17 +888,35 @@ def led_file_problem(target: str | Path) -> str | None:
             return f"{path.parent} is not a folder; leaving it alone"
         if folder.st_uid != os.getuid() or folder.st_mode & 0o022:
             return f"{path.parent} can be written by another account; leaving {path.name} alone"
-        info = os.lstat(path)
+        info: os.stat_result | None = os.lstat(path)
     except FileNotFoundError:
-        return None
+        if not os.path.isdir(path.parent):
+            return None  # the volume went away
+        info = None  # absent: upstream's writer creates it
     except OSError as exc:
         return f"cannot check {path.name}: {exc}"
-    if stat.S_ISLNK(info.st_mode):
-        return f"{path.name} is a symbolic link; not reading or writing through it"
-    if not stat.S_ISREG(info.st_mode):
-        return f"{path.name} is not a regular file; leaving it alone"
-    if info.st_size > MAX_LED_BYTES:
-        return f"{path.name} is {info.st_size} bytes, more than an LED program's {MAX_LED_BYTES}; leaving it alone"
+    if info is not None:
+        if stat.S_ISLNK(info.st_mode):
+            return f"{path.name} is a symbolic link; not reading or writing through it"
+        if not stat.S_ISREG(info.st_mode):
+            return f"{path.name} is not a regular file; leaving it alone"
+        if info.st_size > MAX_LED_BYTES:
+            return (f"{path.name} is {info.st_size} bytes, more than an LED program's {MAX_LED_BYTES}; "
+                    "leaving it alone")
+    # When the LED file cannot be opened or created for writing (a read-only volume), upstream's writer falls
+    # back to the device's read channel: it reads STATUS.TXT with a plain open() and maps setup.html
+    # (readonly_control.py). A link there would be followed and a FIFO would block the helper (#62).
+    for name in DEVICE_CONTROL_FILES:
+        try:
+            other = os.lstat(path.parent / name)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return f"cannot check {name}: {exc}"
+        if stat.S_ISLNK(other.st_mode):
+            return f"{name} is a symbolic link; leaving {path.name} alone"
+        if not stat.S_ISREG(other.st_mode):
+            return f"{name} is not a regular file; leaving {path.name} alone"
     return None
 
 
@@ -1158,6 +1259,8 @@ class Proc:
             if not entry.name.isdigit():
                 continue
             try:
+                if entry.stat().st_uid != os.getuid():
+                    continue  # another account's process is never one of the user's sessions
                 if (entry / "comm").read_text().strip() == binary[:15]:
                     found.append(int(entry.name))
             except OSError:
@@ -1249,6 +1352,8 @@ def find_process(provider: str, session_id: str, cwd: str | None, proc: Proc, ho
 
 
 def ai_title(session_id: str, cwd: str, home: Path) -> str | None:
+    if not SESSION_ID.fullmatch(session_id):
+        return None  # the id becomes a file name: never a path out of the projects folder
     root = Path(os.environ.get("CLAUDE_CONFIG_DIR", home / ".claude")) / "projects"
     transcript = root / cwd.replace("/", "-") / f"{session_id}.jsonl"
     title = None

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.4...v0.9.5) (2026-11-14)
+
+
+### Bug Fixes
+
+* **helper:** close the remaining local-exposure gaps around SidePulse's hooks and devices ([#63](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/63)) ([587bda5](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/587bda566f4b28fed0c1db68c116e34ce2a9d272))
+
 ## [0.9.4](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.3...v0.9.4) (2026-11-13)
 
 

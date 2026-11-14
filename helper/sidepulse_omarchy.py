@@ -616,25 +616,46 @@ def make_private(path: Path, folder: bool) -> str | None:
     return None
 
 
+def create_private(path: Path, folder: bool) -> str | None:
+    """Create a missing folder (700) or empty file (600), its parents as upstream would; None when done
+    or already there. Never follows a link at the path itself."""
+    if os.path.lexists(path):
+        return None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)  # the umask's mode, as upstream's mkdir(parents=True)
+        if folder:
+            os.mkdir(path, 0o700)
+        else:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600))
+    except FileExistsError:
+        return None  # made meanwhile, by upstream or the user: make_private checks it next
+    except OSError as exc:
+        return f"cannot create {path}: {exc}"
+    return None
+
+
 def keep_hook_logs_private(home: Path | None = None) -> list[str]:
-    """Close SidePulse's hook logs to other accounts (#58); the problems found, if any.
+    """Close SidePulse's hook logs to other accounts (#58, #62); the problems found, if any.
 
     Upstream's hook installer and hook create the agent-monitor state folder and its logs with the
     process umask, and the logs hold the agents' complete prompts. A folder the user alone can enter
-    keeps every file in it private, those upstream creates later included, so the state folder becomes
-    700 (each folder upstream's processes may resolve). A hook log configured outside it becomes 600;
-    its folder is someone else's choice and is left alone.
+    keeps every file in it private, those upstream creates later included, so each state folder upstream's
+    processes may resolve becomes 700. While an agent's SidePulse hooks are installed, a missing folder its
+    log goes to is created 700 first, so upstream's hook never creates it with the umask. A hook log
+    configured outside the state folders is created empty at 600 when missing, and loses group and
+    other access when present; its folder is someone else's choice and is left alone.
     """
     from sidepulse.providers import candidate_state_dirs
 
     folders = candidate_state_dirs(home)
-    problems = [problem for folder in folders if (problem := make_private(folder, folder=True))]
-    logs = {Path(log) for row in hooks_event(home)["providers"] for log in row.get("log_paths", ())}
-    for log in sorted(logs):
-        if not any(folder in log.parents for folder in folders):
-            problem = make_private(log, folder=False)
-            if problem:
-                problems.append(problem)
+    # log_paths are listed only for agents whose SidePulse hooks are installed (hooks_event).
+    logs = sorted({Path(log) for row in hooks_event(home)["providers"] for log in row.get("log_paths", ())})
+    outside = [log for log in logs if not any(folder in log.parents for folder in folders)]
+    needed = [folder for folder in folders if any(folder in log.parents for log in logs)]
+    problems = [problem for folder in needed if (problem := create_private(folder, folder=True))]
+    problems += [problem for log in outside if (problem := create_private(log, folder=False))]
+    problems += [problem for folder in folders if (problem := make_private(folder, folder=True))]
+    problems += [problem for log in outside if (problem := make_private(log, folder=False))]
     return problems
 
 
@@ -2193,6 +2214,7 @@ class Helper:
             self.refresh_setup()
             self.refresh_hooks()
             self.refresh_log()
+            self.keep_hook_logs_private()  # a state folder removed while the helper runs comes back private
 
     # --- Laptop (D9, D10): the battery, the 7 s preview and the lid ---
 
@@ -2575,15 +2597,17 @@ class Helper:
         self.refresh_log(force=True)
 
     def keep_hook_logs_private(self) -> None:
-        """keep_hook_logs_private, each problem reported as a hooks error (#58)."""
+        """keep_hook_logs_private, its problems reported once on their own line until they clear (#58, #62)."""
         if not self.capabilities.get("hooks", {}).get("ok"):
             return
         try:
             problems = keep_hook_logs_private()
         except (OSError, ValueError) as exc:
             problems = [f"cannot check the hook logs' permissions: {exc}"]
-        for problem in problems:
-            self.error("hooks", f"hook logs not made private: {problem}")
+        if problems:
+            self.report("hook_privacy", "; ".join(problems))
+        else:
+            self.resolve("hook_privacy")
 
     # --- Notify when a session asks (D20) ---
 

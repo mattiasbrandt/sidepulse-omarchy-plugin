@@ -90,6 +90,7 @@ const PROBLEM_TITLES = {
   frames: "LED programs",
   hooks: "Hooks",
   hook_log: "Hook log",
+  hook_privacy: "Hook log privacy",
   settings: "Settings",
   notify: "Notifications",
   keep_awake: "Keep awake",

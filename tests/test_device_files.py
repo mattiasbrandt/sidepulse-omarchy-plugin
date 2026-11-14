@@ -165,3 +165,11 @@ def test_plain_control_files_are_fine(world):
     (world.led.parent / "STATUS.TXT").write_text("app_version 1.2.0\n")
     (world.led.parent / "setup.html").write_bytes(b"\0" * 9728)
     assert helper.led_file_problem(world.led) is None
+
+
+def test_a_rejected_device_says_the_service_may_still_write_it(world, tmp_path):
+    # Upstream's service writes LEDS.LED itself, following links; the helper can only warn (#62).
+    (tmp_path / "victim").write_text("x")
+    world.led.symlink_to(tmp_path / "victim")
+    set_off(world)
+    assert any("eject the volume" in message for message in device_errors(world.out))

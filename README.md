@@ -330,6 +330,18 @@ calls it:
   (`SIDEPULSE_RESUME`), which only you can read, not through its arguments; and a
   tmux client attaches by session id, not by name. The resumed agent's own command
   line still holds its session id (`claude --resume <id>`), as when you type it.
+- **Limits: SidePulse's own behaviour.** These come from SidePulse's code, run the
+  same without the plugin, and only SidePulse can change them:
+  - SidePulse's service finds and writes devices on its own, without the plugin's
+    checks: it follows a `LEDS.LED` link on a stick someone else made. A device the
+    plugin rejects is named in the popup with a request to eject the volume.
+  - SidePulse's hook creates its log folder with your umask whenever the folder is
+    missing. The plugin re-creates it privately within 5 seconds while the shell
+    runs, but an account that opened a log in that moment keeps it open, and with
+    no shell running nothing re-creates it. A terminal whose `XDG_STATE_HOME`
+    differs from the shell's writes to a folder the plugin does not know.
+  - SidePulse's hook relay socket moves to a fixed name in `/tmp` when the state
+    folder's path is long; the popup says so, the plugin cannot move it.
 - **Developers only:** `scripts/live-check.sh` is not run by users. It copies the
   working tree into `~/.config/omarchy/plugins`, backs up `shell.json` to a
   private directory (`$XDG_RUNTIME_DIR/sidepulse-live-check`, mode 0700, the copy

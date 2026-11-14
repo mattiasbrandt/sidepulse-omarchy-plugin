@@ -327,6 +327,9 @@ _Filled in during grilling, one entry per answered question._
   reads `STATUS.TXT` with a plain `open()` and maps `setup.html` (Pro) or sends USB
   control transfers (Dot). Those two files must be regular files or absent, never a
   link, a FIFO or a device, or the device is left out like a bad LED file.
+  Upstream's service discovers and writes devices on its own (`service.py`), without
+  these checks, so a rejected device's problem line also says the service may still
+  write it and asks to eject the volume. The helper cannot constrain another process.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation

@@ -106,6 +106,8 @@ SIDEPULSE_HOOK_MARKERS = ("hook_entry.py", "agent-monitor hook-log", "sidepulse.
 # The name upstream's backup_file gives a backup: <config name>.bak.<UTC stamp>.
 BACKUP_STAMP = re.compile(r"\.bak\.\d{8}T\d{6}Z")
 
+SERVICE_WRITES_UNCHECKED = "SidePulse's own service does not make this check and may still write it: eject the volume"
+
 # The device files upstream's read-only LED fallback opens besides LEDS.LED (readonly_control.py).
 DEVICE_CONTROL_FILES = ("STATUS.TXT", "setup.html")
 
@@ -2235,7 +2237,9 @@ class Helper:
                     self.devices.append(device)
                 else:
                     unsafe = True
-                    self.report("devices", f"{device.name}: {problem}")
+                    # SidePulse's service discovers and writes devices on its own, without these checks
+                    # (service.py), so the helper's refusal cannot protect the volume by itself (#62).
+                    self.report("devices", f"{device.name}: {problem}. {SERVICE_WRITES_UNCHECKED}")
             from sidepulse.device_writer import DeviceWriteError
             from sidepulse.settings import load_settings
 

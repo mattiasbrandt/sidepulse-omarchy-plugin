@@ -257,7 +257,8 @@ live in SidePulse's own `settings.json`, so they mean the same as in the macOS a
 
 Plugins run unsandboxed inside `omarchy-shell`. The plugin ships no install
 script and needs no sudo, and the helper makes no network requests of its own.
-What it touches at run time:
+What it touches at run time, including what SidePulse's code does when the plugin
+calls it:
 
 - **Runs** one helper, `python -I helper/sidepulse_omarchy.py`, with the Python of
   SidePulse's venv. The widget starts it and stops it when no widget copy is left.
@@ -267,15 +268,22 @@ What it touches at run time:
   `settings.json` (in `~/.config/sidepulse/agent-monitor/`, or `$XDG_CONFIG_HOME`);
   the agent session records (`~/.claude/sessions/` and the transcript titles under
   `~/.claude/projects/`, honouring `CLAUDE_CONFIG_DIR`; `~/.grok/active_sessions.json`);
-  the process table in `/proc`; the agents' hook configs, through SidePulse's
-  code; `/sys/class/power_supply` for the battery; logind's lid state, through
+  the process table in `/proc` (only your own processes are taken for a session,
+  and a session id is used in a file name only when it is a plain id, never a
+  path); the agents' hook configs, through SidePulse's code;
+  `/sys/class/power_supply` for the battery; logind's lid state, through
   `busctl`; and the mount points `/media/$USER`, `/run/media/$USER`, `/media`,
   `/run/media` and `/mnt` for SidePulse devices.
 - **Writes** each mounted SidePulse device's `LEDS.LED` file (its light program),
   through SidePulse's code, only when that file is a regular file of at most an LED
   program's 512 bytes, or absent: a device whose file is a link, a FIFO or larger is
-  left alone and named in the popup; SidePulse's `settings.json` through SidePulse's
-  own save function, staged beside it and moved into place in one rename (the Keep
+  left alone and named in the popup. On a read-only volume SidePulse's code instead
+  sends the program through the device's read channel: it reads `STATUS.TXT`, then
+  maps `setup.html` (SidePulse Pro) or sends USB control transfers (SidePulse Dot),
+  so a device whose `STATUS.TXT` or `setup.html` is a link or not a regular file is
+  left alone too. SidePulse's code serializes these writes with lock files in
+  `~/.cache/sidepulse/device-locks/` (mode 0700). Also SidePulse's `settings.json`,
+  through SidePulse's own save function, staged beside it and moved into place in one rename (the Keep
   awake policy, the idle timeout and retention, the Bar LEDs switch, and a device's
   `led_display`); and the plugin's own entry in
   `~/.config/omarchy/shell.json`, which Omarchy writes.
@@ -283,30 +291,57 @@ What it touches at run time:
   `python -I -m sidepulse agent-monitor install|uninstall <agent>` in SidePulse's venv
   edits `~/.claude/settings.json`, `~/.codex/config.toml` (including Codex's trust
   entries for those hooks), `~/.grok/hooks/`, `~/.cursor/hooks.json` and
-  `~/.junie/config.json`. SidePulse's code writes a backup beside a config it changes.
+  `~/.junie/config.json`. SidePulse's code writes a backup beside a config it changes
+  (`<config>.bak.<time>`; Grok's in `~/.grok/sidepulse-hook-backups/`). For Codex it
+  also runs `codex app-server --stdio` to record the hooks as trusted, so Codex
+  runs them without asking. The plugin runs SidePulse's CLI with umask `077`, so
+  the backups and every other file it creates are yours alone; a config it rewrites
+  keeps its own mode, and backups from earlier lose group and other access.
 - **Keeps the hook logs private.** SidePulse's hooks append each agent event,
-  prompts included, to logs in `~/.local/state/sidepulse/agent-monitor/`, and
-  SidePulse creates that folder and its logs with your umask, often readable by
-  other accounts. After a hook install from Settings, and whenever the helper
-  starts, the helper makes that folder `700` (a hook log kept elsewhere becomes
-  `600`). It leaves a link, or anything owned by another account, alone and names
-  it in the popup.
+  prompts included, to logs in `~/.local/state/sidepulse/agent-monitor/` (the
+  agent's log and `event-status.jsonl`), and SidePulse creates that folder and its
+  logs with your umask, often readable by other accounts. After a hook install from
+  Settings, and whenever the helper starts, the helper makes that folder `700` (a
+  SidePulse hook log kept elsewhere becomes `600`). While SidePulse's hooks are
+  installed and the folder is missing, the helper creates it as `700` before
+  SidePulse's hook can (checked every 5 seconds). Only SidePulse's own hooks count,
+  so files other tools' hooks write are not touched. It leaves a link, or anything
+  owned by another account, alone and names it in the popup. When the state
+  folder's path is long enough that SidePulse moves its hook relay socket to a
+  fixed name in `/tmp`, the popup says so. While the shell, and so the helper, is
+  not running, SidePulse's own behaviour applies.
 - **Runs commands**, each only where the feature is named above:
   `systemctl --user is-active sidepulse.service` (the Setup check);
   `python -I -m sidepulse service start` in SidePulse's venv, only when you choose
-  Start service; `hyprctl clients -j` and `hyprctl dispatch` (list and focus
-  windows); `herdr` and `tmux` (find and select a pane, and attach a client);
+  Start service: SidePulse's code writes `~/.config/systemd/user/sidepulse.service`
+  and runs `systemctl --user daemon-reload`, `enable` and `restart`, so the service
+  also starts at your next login. The service makes network requests only if you
+  linked a phone or a remote receiver yourself (`sidepulse link`);
+  `hyprctl clients -j` and `hyprctl dispatch` (list and focus windows); `herdr`
+  and `tmux` (find and select a pane, and attach a client);
   `xdg-terminal-exec` (resume a session or attach to a multiplexer, only when you
   choose a session); `notify-send` (the notices; a click opens the session);
   `systemd-inhibit --what=sleep:handle-lid-switch --mode=block`, a child that holds
   the sleep lock while Keep awake wants it, and ends with the helper; and
   `busctl get-property` for logind's `LidClosed`, read only.
 - **Keeps session details off command lines**, since other local accounts can read
-  a process's command line: the Ask notice names only the agent, not the project or
-  the question; a resume reaches the terminal through its environment
+  a process's command line: the Ask notice names only the agent (an agent it does
+  not know is "An agent"), not the project or the question; a resume reaches the terminal through its environment
   (`SIDEPULSE_RESUME`), which only you can read, not through its arguments; and a
   tmux client attaches by session id, not by name. The resumed agent's own command
   line still holds its session id (`claude --resume <id>`), as when you type it.
+- **Limits: SidePulse's own behaviour.** These come from SidePulse's code, run the
+  same without the plugin, and only SidePulse can change them:
+  - SidePulse's service finds and writes devices on its own, without the plugin's
+    checks: it follows a `LEDS.LED` link on a stick someone else made. A device the
+    plugin rejects is named in the popup with a request to eject the volume.
+  - SidePulse's hook creates its log folder with your umask whenever the folder is
+    missing. The plugin re-creates it privately within 5 seconds while the shell
+    runs, but an account that opened a log in that moment keeps it open, and with
+    no shell running nothing re-creates it. A terminal whose `XDG_STATE_HOME`
+    differs from the shell's writes to a folder the plugin does not know.
+  - SidePulse's hook relay socket moves to a fixed name in `/tmp` when the state
+    folder's path is long; the popup says so, the plugin cannot move it.
 - **Developers only:** `scripts/live-check.sh` is not run by users. It copies the
   working tree into `~/.config/omarchy/plugins`, backs up `shell.json` to a
   private directory (`$XDG_RUNTIME_DIR/sidepulse-live-check`, mode 0700, the copy

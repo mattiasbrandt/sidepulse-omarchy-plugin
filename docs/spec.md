@@ -262,6 +262,10 @@ _Filled in during grilling, one entry per answered question._
   its argv for the window's life and any local account can read it, while
   `/proc/<pid>/environ` is the owner's alone (marketplace review). A tmux client
   attaches by session id (`$N`), not by name, for the same reason.
+  *Amended in #62:* the process lookup takes only the user's own processes from
+  `/proc` (another account's `claude --resume <id>` is never this session), and a
+  session id from latest.json becomes part of a file name (the Claude transcript
+  title) only when it is a plain id, never a path or a dots-only name.
   *Amended after #12 (daily use):* the list leaves out a finished (Done) session
   whose folder no longer exists, such as a deleted worktree: it cannot be resumed,
   and Codex review runs in removed worker worktrees crowded the ten rows. It is
@@ -318,6 +322,14 @@ _Filled in during grilling, one entry per answered question._
   the file must also be the user's own and writable by no one else, since upstream's
   writer reopens the file by name and another account could swap in a link between
   the check and the write; an error during the check names the device and skips it.
+  *Amended in #62:* when the LED file cannot be opened or created for writing (a
+  read-only volume), upstream's writer falls back to the device's read channel: it
+  reads `STATUS.TXT` with a plain `open()` and maps `setup.html` (Pro) or sends USB
+  control transfers (Dot). Those two files must be regular files or absent, never a
+  link, a FIFO or a device, or the device is left out like a bad LED file.
+  Upstream's service discovers and writes devices on its own (`service.py`), without
+  these checks, so a rejected device's problem line also says the service may still
+  write it and asks to eject the volume. The helper cannot constrain another process.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -440,6 +452,23 @@ _Filled in during grilling, one entry per answered question._
   outside it loses group and other access, and its folder is left alone. A link,
   a folder or file owned by another account, or an error is reported, not
   followed. The files are upstream's; the plugin only closes them.
+  *Amended in #62:* closing an existing folder is not enough: with hooks still
+  installed and the folder gone, upstream's hook would create it again with the
+  umask. While an agent's SidePulse hooks are installed, the helper creates a
+  missing state folder with mode 700 (upstream's hook writes its audit log,
+  `event-status.jsonl`, there wherever the agent's log goes; a SidePulse log
+  kept elsewhere: an empty file at 600), at start, after a hook install and
+  every 5 s while it runs. Only SidePulse's own hooks count: upstream lists the
+  `--log` and `>>` targets of every hook, so a log path counts only on a config
+  line carrying upstream's markers (`hook_entry.py`, `agent-monitor hook-log`,
+  `sidepulse.cursor_hook`). Upstream's CLI (hook install and uninstall, service
+  start) runs with umask 077, so its backups of agent configs, which may hold
+  API keys, are private, and older backups (`<config>.bak.<UTC stamp>`, Grok's
+  backup folder) lose group and other access. A state folder whose path makes
+  upstream move its relay socket to a fixed name in `/tmp` is named as a
+  problem. Problems show once on their own line ("Hook log privacy") and clear
+  when solved. While no helper runs (no Omarchy shell), upstream's own
+  behaviour applies; that is upstream's to change.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.
@@ -501,6 +530,8 @@ _Filled in during grilling, one entry per answered question._
   over a fixed body. The project and the agent's question stay out, because
   notify-send's arguments can be read by any local account through `/proc/<pid>/cmdline`
   while the notice waits (marketplace review, omacom/omarchy-plugin-marketplace#11078).
+  *Amended in #62:* an agent the plugin does not know is named "An agent", so no
+  provider string read from latest.json reaches the command line.
 - **D21 The look follows the product (plan review):** popup device rows draw
   a SidePulse Dot (2 LEDs) or SidePulse Pro (8 LEDs) lit live; the Bar LEDs
   match the connected product (2 or 8; 8 with none or both, since upstream

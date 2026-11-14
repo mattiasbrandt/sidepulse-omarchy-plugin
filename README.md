@@ -289,8 +289,11 @@ What it touches at run time:
   SidePulse creates that folder and its logs with your umask, often readable by
   other accounts. After a hook install from Settings, and whenever the helper
   starts, the helper makes that folder `700` (a hook log kept elsewhere becomes
-  `600`). It leaves a link, or anything owned by another account, alone and names
-  it in the popup.
+  `600`). While hooks are installed and the folder is missing, the helper creates
+  it as `700` before SidePulse's hook can (checked every 5 seconds). It leaves a
+  link, or anything owned by another account, alone and names it in the popup.
+  While the shell, and so the helper, is not running, SidePulse's own behaviour
+  applies.
 - **Runs commands**, each only where the feature is named above:
   `systemctl --user is-active sidepulse.service` (the Setup check);
   `python -I -m sidepulse service start` in SidePulse's venv, only when you choose

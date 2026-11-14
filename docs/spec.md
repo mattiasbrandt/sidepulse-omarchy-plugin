@@ -440,6 +440,14 @@ _Filled in during grilling, one entry per answered question._
   outside it loses group and other access, and its folder is left alone. A link,
   a folder or file owned by another account, or an error is reported, not
   followed. The files are upstream's; the plugin only closes them.
+  *Amended in #62:* closing an existing folder is not enough: with hooks still
+  installed and the folder gone, upstream's hook would create it again with the
+  umask. While an agent's SidePulse hooks are installed, the helper creates a
+  missing folder its log goes to with mode 700 (a log kept elsewhere: an empty
+  file at 600), at start, after a hook install and every 5 s while it runs.
+  Problems show once on their own line ("Hook log privacy") and clear when
+  solved. While no helper runs (no Omarchy shell), upstream's own behaviour
+  applies; that is upstream's to change.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.

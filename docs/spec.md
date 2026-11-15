@@ -354,6 +354,15 @@ _Filled in during grilling, one entry per answered question._
   also skips upstream's USB scan: a Dot reached only over USB has no LED file to read
   back, so it stays with the service. The product is the model upstream read from
   `STATUS.TXT`, else its LED count rule.
+  *Amended in #66:* the volume's folder must be the user's own and every folder above
+  it must pass `trusted_folder_problem` (owned by the user or root, writable by no
+  other account; a sticky shared folder only above the user's own folder), since
+  renaming a folder on the way would swap the volume between the check and
+  upstream's write by name. Upstream's device-lock folder is kept 700 by the privacy
+  pass (an account able to open a lock file could hold `flock` and stall every
+  write). Discovery runs under a 3 s deadline on a worker thread (`Deadline`): it
+  stats every mount-root entry, and an automount whose server is gone would block the
+  helper's serial loop; one still running makes the next call fail at once.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -505,6 +514,23 @@ _Filled in during grilling, one entry per answered question._
   Upstream's Codex trust step runs in the home folder. The `/tmp` socket the popup
   names is the status socket (`program_transport.status_socket_path`); the relay
   socket rule it used to read is gone.
+  *Amended in #66 (marketplace review round 5):* fail closed. Before upstream's
+  installer runs, `hook_install_problems` checks each state folder and every folder
+  above it, the entries already in it (a link or another account's file would be
+  written through: a 700 folder does not undo what was planted while it was open), the
+  agent's config folder, the folder of a SidePulse hook log kept outside, and the
+  status socket's place; any problem refuses the install with the reason. When the
+  privacy pass after an install still reports a problem, the hooks are uninstalled
+  again and the result says so. The pass also names those folder and entry problems
+  on each sweep. Reads follow the same rule: the agents' state only from a socket the
+  user owns in a trusted folder (another account could otherwise answer with sessions
+  and folders a click would resume), upstream's settings only from the user's own
+  regular file in a trusted folder (otherwise upstream's defaults, as its own
+  `load_settings` gives for an unreadable file, and saves are refused), the hook log
+  likewise. Files the helper parses itself are opened non-blocking and must be the
+  user's own regular files (`open_own`: 16 MiB for configs and records, 1 MiB lines for
+  transcripts). The service check and the sessions' folder check run under deadlines
+  (3 s, 2 s). Hooks installed outside the plugin are named, not removed.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.

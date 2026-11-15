@@ -32,14 +32,29 @@ def test_missing_wasmtime_disables_only_the_bar_leds(monkeypatch):
     assert caps["devices"]["ok"] is True
 
 
-def test_upstream_without_the_state_rules_disables_state_with_a_reason(monkeypatch):
-    fake = types.ModuleType("sidepulse.collector")  # has none of upstream's names
-    monkeypatch.setitem(sys.modules, "sidepulse.collector", fake)
+def test_upstream_without_the_daemon_state_disables_state_with_a_reason(monkeypatch):
+    fake = types.ModuleType("sidepulse.program_presentation")  # has none of upstream's names
+    monkeypatch.setitem(sys.modules, "sidepulse.program_presentation", fake)
     caps = helper.probe_capabilities()
     assert caps["state"]["ok"] is False
-    assert caps["state"]["reason"].startswith("sidepulse.collector has no ")
+    assert caps["state"]["reason"].startswith("sidepulse.program_presentation has no ")
     assert "upstream changed" in caps["state"]["reason"]
     assert caps["bar_leds"]["ok"] is True
+
+
+def test_an_upstream_older_than_20ca7fd_is_refused_with_a_reason(monkeypatch):
+    # 6d55225 had no status server (program_transport), no daemon snapshot and no split discovery: state,
+    # hooks and devices must say so rather than read a latest.json nothing updates or run a removed CLI.
+    monkeypatch.setitem(sys.modules, "sidepulse.program_transport", None)
+    monkeypatch.setitem(sys.modules, "sidepulse.program_presentation", None)
+    fake_writer = types.ModuleType("sidepulse.device_writer")
+    for name in ("discover_devices", "write_led_program", "MAX_LED_BYTES"):
+        setattr(fake_writer, name, object())
+    monkeypatch.setitem(sys.modules, "sidepulse.device_writer", fake_writer)
+    caps = helper.probe_capabilities()
+    for feature in ("state", "hooks", "devices"):
+        assert caps[feature]["ok"] is False, feature
+        assert caps[feature]["reason"], feature
 
 
 def test_missing_service_module_disables_only_service(monkeypatch):

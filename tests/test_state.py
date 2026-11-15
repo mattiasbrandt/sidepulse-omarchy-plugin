@@ -9,7 +9,6 @@ own `AgentMode`. Any drift upstream fails these tests.
 from __future__ import annotations
 
 import ast
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -82,15 +81,21 @@ def test_unknown_mode_is_idle():
     assert helper.state_for_mode("not-a-mode") == "idle"
 
 
-def test_mixed_sessions_show_the_most_urgent_state_and_count_active_ones():
-    now = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+def _read(daemon, statuses) -> dict:
+    """The state event for these statuses, as the service holds them and the helper reads them."""
+    daemon.store.rows = tuple(statuses)
+    return helper.state_event(helper.read_snapshot())
+
+
+def test_mixed_sessions_show_the_most_urgent_state_and_count_active_ones(daemon):
+    now = datetime.now(timezone.utc)
     statuses = (
         _status("a", AgentMode.WORKING, now - timedelta(seconds=5), event="UserPromptSubmit"),
         _status("b", AgentMode.WAITING_FOR_INPUT, now - timedelta(seconds=30)),
         _status("c", AgentMode.COMPLETED, now - timedelta(seconds=10)),
         _status("d", AgentMode.IDLE_READY, now - timedelta(seconds=1)),
     )
-    event = helper.state_event(helper.snapshot_from_statuses(statuses, now=now, idle_timeout_seconds=3600.0))
+    event = _read(daemon, statuses)
     assert event["state"] == "ask"
     assert event["label"] == "Ask"
     assert event["colour"] == "#FF8A00"
@@ -100,49 +105,35 @@ def test_mixed_sessions_show_the_most_urgent_state_and_count_active_ones():
     assert event["top"]["agent_id"] == "b"
 
 
-def test_only_completed_sessions_show_done_and_are_not_active():
-    now = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
-    statuses = (_status("c", AgentMode.COMPLETED, now - timedelta(seconds=10)),)
-    event = helper.state_event(helper.snapshot_from_statuses(statuses, now=now, idle_timeout_seconds=3600.0))
+def test_only_completed_sessions_show_done_and_are_not_active(daemon):
+    now = datetime.now(timezone.utc)
+    event = _read(daemon, (_status("c", AgentMode.COMPLETED, now - timedelta(seconds=10)),))
     assert (event["state"], event["label"], event["active_count"], event["urgent"]) == ("done", "Done", 0, False)
 
 
-def test_no_sessions_is_idle_with_no_top_session():
-    now = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
-    event = helper.state_event(helper.snapshot_from_statuses((), now=now, idle_timeout_seconds=3600.0))
+def test_no_sessions_is_idle_with_no_top_session(daemon):
+    event = _read(daemon, ())
     assert (event["state"], event["label"], event["colour"], event["top"]) == ("idle", "Idle", "#A8A8A8", None)
 
 
-def test_status_older_than_idle_timeout_is_stale_and_not_shown_as_working():
-    now = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
-    statuses = (_status("old", AgentMode.WORKING, now - timedelta(hours=2), event="UserPromptSubmit"),)
-    event = helper.state_event(helper.snapshot_from_statuses(statuses, now=now, idle_timeout_seconds=3600.0))
-    assert event["state"] == "idle"
-    assert event["active_count"] == 0
-    assert event["stale_count"] == 1
+def test_a_long_finished_session_is_dropped_by_the_service(daemon):
+    # The service owns the rules since 20ca7fd (ProgramMonitor): a session completed 20 min ago is gone.
+    old = _status("old", AgentMode.COMPLETED, datetime.now(timezone.utc) - timedelta(minutes=30))
+    assert _read(daemon, (old,))["state"] == "idle"
 
 
-def test_read_latest_json_uses_upstream_rules(tmp_path):
-    now = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
-    latest = tmp_path / "latest.json"
-    recent = _status("live", AgentMode.TOOL_RUNNING, now - timedelta(seconds=2), event="PreToolUse")
-    latest.write_text(json.dumps({"updated_at": now.isoformat(), "statuses": [recent.to_dict(now)]}))
-    snapshot = helper.read_snapshot(latest, now=now, idle_timeout_seconds=3600.0)
-    assert snapshot is not None
-    assert helper.state_event(snapshot)["label"] == "Working"
+def test_a_stopped_service_is_a_reason_not_an_empty_state():
+    # No daemon runs in this test's scratch state folder.
+    with pytest.raises(ValueError, match="service is not running"):
+        helper.read_snapshot()
 
 
-def test_missing_latest_json_is_an_empty_snapshot(tmp_path):
-    now = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
-    snapshot = helper.read_snapshot(tmp_path / "latest.json", now=now, idle_timeout_seconds=3600.0)
-    assert helper.state_event(snapshot)["state"] == "idle"
+def test_an_error_reply_is_a_reason(daemon, monkeypatch):
+    import sidepulse.program_transport as transport
 
-
-def test_malformed_latest_json_raises_so_the_caller_can_report_it(tmp_path):
-    latest = tmp_path / "latest.json"
-    latest.write_text("{not json")
-    with pytest.raises(ValueError):
-        helper.read_snapshot(latest, now=datetime.now(timezone.utc), idle_timeout_seconds=3600.0)
+    monkeypatch.setattr(transport, "submit_report", lambda *a, **k: {"ok": False, "error": "Daemon is busy"})
+    with pytest.raises(ValueError, match="sent no snapshot"):
+        helper.read_snapshot()
 
 
 def test_agent_status_from_dict_is_upstream_parsing():

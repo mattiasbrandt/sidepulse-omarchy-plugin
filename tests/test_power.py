@@ -66,12 +66,13 @@ def write_battery(root: Path, *, percent: int, status: str, plugged: bool, power
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path, monkeypatch, service):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    service()
     bin_dir = tmp_path / "fake-bin"
     bin_dir.mkdir()
     (bin_dir / "busctl").write_text("#!/bin/sh\nexit 0\n")
@@ -89,7 +90,7 @@ def world(tmp_path, monkeypatch):
     h.power_root = tmp_path / "power"  # no battery until a test makes one
     h.lid_reader = lambda: lid["closed"]
     h.clock = lambda: now[0]
-    dot = helper.discover_device_rows()[0]
+    dot = helper.discover_device_rows()[0][0]
     return SimpleNamespace(h=h, out=out, now=now, lid=lid, power=tmp_path / "power", dot=dot,
                            led_file=dot.target, dot_id=dot.id)
 
@@ -228,9 +229,15 @@ def test_the_battery_and_lid_capabilities_are_probed():
     assert caps["lid"]["ok"] is True, caps["lid"]["reason"]
 
 
-def test_copied_lid_rules_are_unchanged_from_upstream():
-    for name in ("lid_closed_led_state_should_hold", "lid_close_animation_should_run"):
-        assert function_ast(Path(helper.__file__), name) == function_ast(upstream_status_bar(), name), name
+@pytest.mark.parametrize("name", ["lid_closed_led_state_should_hold", "lid_close_animation_should_run"])
+def test_the_lid_rules_are_upstreams_own(name, monkeypatch):
+    # Since 20ca7fd upstream keeps them in daemon_runtime.py, importable on Linux: the helper calls them.
+    import sidepulse.daemon_runtime as runtime
+
+    calls = []
+    monkeypatch.setattr(runtime, name, lambda **k: calls.append(k) or "upstream")
+    assert getattr(helper, name)(sleep_prevention_policy="agents", agents_active=False) == "upstream"
+    assert calls == [{"sleep_prevention_policy": "agents", "agents_active": False}]
 
 
 # --- The Battery display (D9): the LEDs show upstream's battery program ---

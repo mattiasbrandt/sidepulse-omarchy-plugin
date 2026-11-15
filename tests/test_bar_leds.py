@@ -27,6 +27,7 @@ from sidepulse.models import AgentMode
 from sidepulse.settings import AgentAnimationSetting, AgentMonitorSettings, CustomAgentAnimation
 
 import bar_leds_reference as reference
+from daemon import Daemon
 import sidepulse_omarchy as helper
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -245,17 +246,30 @@ def scratch(tmp_path, monkeypatch):
     return tmp_path
 
 
+DAEMONS: dict[Path, Daemon] = {}
+
+
+@pytest.fixture(autouse=True)
+def stop_daemons():
+    yield
+    while DAEMONS:
+        DAEMONS.popitem()[1].stop()
+
+
 def write_latest(tmp: Path, mode: str) -> None:
+    """One session in this mode, held by a SidePulse daemon in the scratch state folder (tests/daemon.py)."""
     from datetime import datetime, timezone
 
-    directory = tmp / "state" / "sidepulse" / "agent-monitor"
-    directory.mkdir(parents=True, exist_ok=True)
     row = {"provider": "claude", "agent_id": "claude:session:abc", "display_name": "demo", "mode": mode,
            "mode_label": mode, "updated_at": datetime.now(timezone.utc).isoformat(),
            "event_name": "PreToolUse", "session_id": "abc", "cwd": "/tmp/demo", "stale": False}
-    tmp_path = directory / "latest.json.tmp"
-    tmp_path.write_text(json.dumps({"updated_at": row["updated_at"], "statuses": [row]}))
-    os.replace(tmp_path, directory / "latest.json")
+    if tmp not in DAEMONS:
+        DAEMONS[tmp] = Daemon(tmp / "state" / "sidepulse" / "agent-monitor")
+    DAEMONS[tmp].set([row])
+
+
+def stop_service(tmp: Path) -> None:
+    DAEMONS.pop(tmp).stop()
 
 
 def write_settings(tmp: Path, bar_leds: bool) -> None:
@@ -321,7 +335,7 @@ def test_unreadable_state_shows_no_band(scratch):
     write_settings(scratch, True)
     out = io.StringIO()
     h = make_helper(scratch, out)
-    (scratch / "state" / "sidepulse" / "agent-monitor" / "latest.json").write_text("not json")
+    stop_service(scratch)
     h.refresh_state()
     out.seek(0)
     out.truncate()

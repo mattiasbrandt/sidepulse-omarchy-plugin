@@ -1,7 +1,7 @@
 """Hooks (D13, D14): per-provider status, install and uninstall, and the hook log.
 
 Upstream's own code does the work: detect_provider_configs (doctor's payload),
-the agent-monitor CLI's install and uninstall, and the audit log reader. Every
+upstream's `sidepulse setup` install and `--uninstall`, and the audit log reader. Every
 test runs with a private HOME and XDG dirs, so the user's real agent configs
 are never touched.
 """
@@ -45,10 +45,12 @@ def test_the_agent_list_is_upstreams_own_list_in_its_order(home):
     assert [row["provider"] for row in helper.hooks_event()["providers"]] == list(HOOK_PROVIDERS)
 
 
-def test_install_then_uninstall_claude_hooks_in_a_scratch_home(home):
+def test_install_then_uninstall_claude_hooks_in_a_scratch_home(home, fake_systemctl):
     ok, message = helper.run_hook_command("install", "claude", helper.sys.executable)
     assert ok, message
     assert "claude: updated" in message
+    # Upstream's `setup <provider>` (20ca7fd) also installs and restarts the service the hooks report to.
+    assert "--user restart sidepulse.service" in fake_systemctl.read_text()
     settings = home / "home" / ".claude" / "settings.json"
     assert settings.exists()
     installed = provider(helper.hooks_event(), "claude")
@@ -59,6 +61,8 @@ def test_install_then_uninstall_claude_hooks_in_a_scratch_home(home):
     assert ok, message
     assert "claude: removed" in message
     assert provider(helper.hooks_event(), "claude")["hooks_enabled"] is False
+    # Removing hooks leaves the service alone: `setup <provider> --uninstall` only edits the config.
+    assert fake_systemctl.read_text().count("restart") == 1
 
 
 def test_a_hook_command_that_fails_is_reported_with_its_output(home, monkeypatch):

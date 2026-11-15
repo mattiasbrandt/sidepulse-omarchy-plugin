@@ -24,4 +24,4 @@ pythonpath = ["helper"]
 # The commit the spec's research (docs/spec.md, appendix) and the user's
 # SidePulse install were checked against.
 [tool.uv.sources]
-sidepulse = { git = "https://github.com/inteliwear/sidepulse.git", rev = "6d55225fed20a82521b23d86a4df2c4a15dff295" }
+sidepulse = { git = "https://github.com/inteliwear/sidepulse.git", rev = "20ca7fdd6645ba070af607e24587084b6f809275" }

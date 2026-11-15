@@ -299,7 +299,8 @@ calls it:
   so a device whose `STATUS.TXT` or `setup.html` is a link or not a regular file is
   left alone too. SidePulse's code serializes these writes with lock files in
   `~/.cache/sidepulse/device-locks/` (mode 0700). Also SidePulse's `settings.json`,
-  through SidePulse's own save function, staged beside it and moved into place in one rename (the Keep
+  through SidePulse's own save function, staged beside it and moved into place in one rename, as a
+  file only you can read (the Keep
   awake policy, the idle timeout and retention, the Bar LEDs switch, and a device's
   `led_display`); and the plugin's own entry in
   `~/.config/omarchy/shell.json`, which Omarchy writes.
@@ -337,7 +338,11 @@ calls it:
     link, or a file of another account, is refused), the agent's config folder, the
     folder of a hook log kept elsewhere, and the status socket (refused when SidePulse
     would put it in `/tmp`). If the check after the install still finds a problem,
-    the hooks are taken out again and the popup says why;
+    the hooks are taken out again and the popup says why. Taking them out does not
+    undo the rest of SidePulse's install: its service stays installed, enabled and
+    restarted (a restart forgets the sessions it held until the agents report
+    again), and for Codex `[features] hooks = true` and the hooks' trust entries stay
+    in `~/.codex/config.toml`. A linked agent config is checked where it points, too;
   - reading the agents' state: the status socket's folder, and the socket must be
     yours, so no other account can answer with sessions of its choosing;
   - SidePulse's `settings.json`: not read or saved when its folder fails, or when
@@ -346,14 +351,18 @@ calls it:
   - the hook log, and a device's volume and every folder above it;
   - SidePulse's device-lock folder (`~/.cache/sidepulse/device-locks/`) is kept
     `700`, so no other account can hold a device's lock.
-  Files the helper reads for itself (agent configs, session records, transcripts,
-  settings) are opened without blocking and must be your own regular files, so a
-  FIFO put in their place never stalls the helper; configs and session records are
-  read up to 16 MiB, transcripts one line of up to 1 MiB at a time. Device
-  discovery (which stats every entry under `/mnt` and the other mount points), the
-  `systemctl` service check and the sessions' folder check run with a deadline (3,
-  3 and 2 seconds): one that hangs, such as an unreachable network mount, is named
-  in the popup and the rest of the helper goes on.
+  Files the helper reads for itself (the hook lines of agent configs, session
+  records, transcripts, settings) are opened without blocking and must be your own
+  regular files, so a FIFO put in their place never stalls the helper; configs and
+  session records are read up to 16 MiB, transcripts one line of up to 1 MiB at a
+  time. SidePulse's own detectors still read each agent's config by name, as
+  SidePulse does without the plugin; those files sit in your own `~/.claude`,
+  `~/.codex` and similar folders. Reading the agents' state from SidePulse's service
+  (0.25 seconds), device discovery (which stats every entry under `/mnt` and the
+  other mount points), the `systemctl` service check and the sessions' folder check
+  run with a deadline (3, 3 and 2 seconds for the last three): one that hangs, such
+  as an unreachable network mount or a service that stops answering, is named in
+  the popup and the rest of the helper goes on.
 - **Runs commands**, each only where the feature is named above:
   `systemctl --user is-active sidepulse.service` (the Setup check);
   `python -I -m sidepulse service start` in SidePulse's venv, only when you choose

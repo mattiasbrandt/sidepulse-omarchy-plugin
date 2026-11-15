@@ -363,6 +363,12 @@ _Filled in during grilling, one entry per answered question._
   write). Discovery runs under a 3 s deadline on a worker thread (`Deadline`): it
   stats every mount-root entry, and an automount whose server is gone would block the
   helper's serial loop; one still running makes the next call fail at once.
+  *Amended in #70:* before the helper writes a Display or brightness under a device's
+  id, it moves an entry kept under the mount path to that id (`adopt_device_key`), as
+  upstream's migration does: upstream keeps an entry already under the id, so writing
+  one first would replace the saved brightness with upstream's default 255.
+  `settings.json` is saved without group and other access (it names the devices and
+  their mount paths).
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -531,6 +537,14 @@ _Filled in during grilling, one entry per answered question._
   user's own regular files (`open_own`: 16 MiB for configs and records, 1 MiB lines for
   transcripts). The service check and the sessions' folder check run under deadlines
   (3 s, 2 s). Hooks installed outside the plugin are named, not removed.
+  *Amended in #70 (final audit, Codex review of #67):* the daemon read also runs under
+  a deadline (0.25 s): upstream's client waits 0.5 s per receive and tries up to two
+  sockets, so a service that hangs would otherwise hold the loop each tick. A reply
+  whose sessions lack text fields makes the State unavailable instead of ending the
+  helper; a hook-log time out of the local clock's range shows as written. Both path
+  chains are checked: the folder holding a linked `settings.json` or agent config, and
+  the folder of what it names. A rolled-back install says what `setup` left: its
+  service stays installed and restarted, and Codex keeps `[features] hooks = true`.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.

@@ -143,7 +143,7 @@ def test_a_device_left_manual_by_a_crash_is_repaired_to_agent(home, mounts):
     assert load_settings().display_for_device(device.id) == "agent"
 
 
-def test_settings_are_saved_through_one_rename_and_keep_their_mode(home, mounts, monkeypatch):
+def test_settings_are_saved_through_one_rename_and_keep_their_mode_but_private(home, mounts, monkeypatch):
     device = device_by_name("PulseDot")
     helper.change_settings(lambda s: s.with_device_brightness(device.id, 100))
     path = settings_file(home)
@@ -156,7 +156,7 @@ def test_settings_are_saved_through_one_rename_and_keep_their_mode(home, mounts,
     [(source, destination)] = renames
     assert destination == path and source.parent == path.parent and source != path
     assert load_settings().brightness_for_device(device.id) == 50
-    assert oct(path.stat().st_mode & 0o777) == "0o640"
+    assert oct(path.stat().st_mode & 0o777) == "0o600"  # the mode, without group and other access (#70)
     assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(".")) == []
 
 

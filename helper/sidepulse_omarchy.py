@@ -99,6 +99,9 @@ TRANSCRIPT_LINE_LIMIT = 1024 * 1024
 DISCOVERY_SECONDS = 3.0
 SERVICE_CHECK_SECONDS = 3.0
 FOLDER_CHECK_SECONDS = 2.0
+# The service answers get_state in milliseconds; upstream's client waits 0.5 s per receive and tries up to
+# two sockets, so a service that hangs would hold the loop each tick without this (#70).
+STATE_READ_SECONDS = 0.25
 
 # The umask upstream's CLI runs with when the plugin starts it (#62): every file it creates (agent config
 # backups, the hook-log folder and logs, the service unit) is the user's alone. A config it rewrites in
@@ -367,7 +370,7 @@ def read_snapshot() -> Any:
     if problem is not None:
         raise ValueError(problem)
     try:
-        return DaemonMonitor().snapshot(include_stale=False)
+        snapshot = DaemonMonitor().snapshot(include_stale=False)
     except StatusError as exc:
         if isinstance(exc.__cause__, (FileNotFoundError, ConnectionRefusedError)):
             raise ValueError(DAEMON_UNAVAILABLE) from exc
@@ -375,6 +378,20 @@ def read_snapshot() -> Any:
     except (KeyError, TypeError, ValueError) as exc:
         # An error reply ({"ok": false, "error": ...}) or a snapshot of a shape this helper does not know.
         raise ValueError(f"the SidePulse service sent no snapshot: {exc!r}") from exc
+    # Upstream builds each status from the reply's fields as they come (row.get), and the helper's lists and
+    # events read them as text: a field missing or of another type from a newer service must make the State
+    # unavailable with a reason, not end the helper (#70, D14).
+    statuses = [*snapshot.statuses, *snapshot.stale_statuses, snapshot.aggregate.representative]
+    for status in statuses:
+        if status is None:
+            continue
+        for name in ("provider", "agent_id"):
+            if not isinstance(getattr(status, name), str):
+                raise ValueError(f"the SidePulse service sent a session without a text {name}")
+        for name in ("display_name", "session_id", "cwd", "message", "tool_name", "event_name"):
+            if not isinstance(getattr(status, name, None), (str, type(None))):
+                raise ValueError(f"the SidePulse service sent a session whose {name} is not text")
+    return snapshot
 
 
 def state_event(snapshot: Any) -> dict[str, Any]:
@@ -540,7 +557,7 @@ def change_settings(change: Any) -> None:
     half-written file could save the defaults over the user's settings (#55).
     The text is read once, checked, and handed to upstream as a private copy
     beside it; upstream saves into that copy, which then replaces the file in
-    one rename, keeping the file's mode. A settings.json that is a link (a
+    one rename, keeping the file's mode without group and other access. A settings.json that is a link (a
     dotfiles checkout) keeps being one: the rename lands on the file it names.
     """
     from sidepulse.settings import default_settings_path, load_settings, save_settings
@@ -561,7 +578,9 @@ def change_settings(change: Any) -> None:
         current = load_settings(staged) if text is not None else load_settings(path)
         save_settings(change(current), staged)
         if text is not None:
-            os.chmod(staged, stat.S_IMODE(os.stat(path).st_mode))
+            # The file's own mode, without group and other access: it names the devices and their
+            # mount paths (#70). mkstemp already made the staged copy 600.
+            os.chmod(staged, stat.S_IMODE(os.stat(path).st_mode) & 0o700)
         os.replace(staged, path)
     except BaseException:
         staged.unlink(missing_ok=True)
@@ -642,8 +661,20 @@ def hook_install_problems(provider: str, home: Path | None = None) -> list[str]:
     row = next((row for row in hooks_event(home)["providers"] if row.get("provider") == provider), {})
     if row.get("config_path"):
         config = Path(row["config_path"])
-        if problem := trusted_folder_problem(config.parent):
-            problems.append(f"{provider}'s config folder: {problem}")
+        target = Path(os.path.realpath(config))
+        # Upstream's installer reads, backs up and rewrites the config by name, following a link (#70).
+        for folder in dict.fromkeys([config.parent, target.parent]):
+            if problem := trusted_folder_problem(folder):
+                problems.append(f"{provider}'s config folder: {problem}")
+        try:
+            info = os.lstat(target)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            problems.append(f"cannot check {target}: {exc}")
+        else:
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                problems.append(f"{target} is not the user's own regular file")
     for log in sidepulse_hooks(row)[1]:
         if any(folder in log.parents for folder in folders):
             continue  # checked with its state folder's entries
@@ -798,10 +829,14 @@ def settings_problem() -> str | None:
     replace whatever file that account chose."""
     from sidepulse.settings import default_settings_path
 
-    path = Path(os.path.realpath(default_settings_path()))
-    problem = trusted_folder_problem(path.parent)
-    if problem is not None:
-        return f"SidePulse's settings: {problem}"
+    # Upstream opens the path by name, so both the folder holding it and, when it is a link, the folder
+    # holding what it names must be trusted (#70); its custom animations sit in `animations/` beside it.
+    named = Path(default_settings_path())
+    path = Path(os.path.realpath(named))
+    for folder in dict.fromkeys([named.parent, named.parent / "animations", path.parent]):
+        problem = trusted_folder_problem(folder)
+        if problem is not None:
+            return f"SidePulse's settings: {problem}"
     try:
         info = os.lstat(path)
     except FileNotFoundError:
@@ -1049,7 +1084,7 @@ def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict
 def _local_clock(stamp: str) -> str:
     try:
         return datetime.fromisoformat(stamp).astimezone().strftime("%H:%M:%S")
-    except ValueError:
+    except (ValueError, OverflowError):  # year 1 or 9999 overflows the local clock (#70)
         return stamp
 
 
@@ -1112,6 +1147,7 @@ def apply_display(device: Device, display: str, program: str | None = None) -> N
     if display == "off":
         program = builtin_animation_program("off", device.led_count)
     upstream = "agent" if program is None else "custom"
+    adopt_device_key(device)
     if load_own_settings().display_for_device(device.id) != upstream:
         change_settings(
             lambda s: s.with_device_display(device.id, upstream, name=device.name, path=device.path))
@@ -1246,11 +1282,30 @@ def full_brightness_program(text: str | None, brightness: int) -> str | None:
     return "\n".join(lines)
 
 
+def adopt_device_key(device: Device) -> None:
+    """Move a device's settings kept under its mount path to its id, before anything is written under the
+    id (#70). Upstream's service does the same move (daemon_runtime.migrate_device_settings), but only while
+    it runs, and it keeps an entry already under the id: a Display or brightness the helper saved under the
+    new id first would get upstream's default brightness, 255, and the saved one would be dropped."""
+    from dataclasses import replace
+
+    if device.id == device.path:
+        return
+    entries = load_own_settings().devices
+    if any(entry.device_id == device.id for entry in entries) or \
+            not any(entry.device_id == device.path for entry in entries):
+        return
+    change_settings(lambda s: replace(s, devices=tuple(
+        replace(entry, device_id=device.id) if entry.device_id == device.path else entry
+        for entry in s.devices)))
+
+
 def set_device_brightness(device: Device, percent: float) -> None:
     """Upstream's brightness is 0-255 per device; the widget speaks percent."""
     from sidepulse.settings import normalize_brightness
 
     value = normalize_brightness(percent * 255 / 100)
+    adopt_device_key(device)
     change_settings(
         lambda s: s.with_device_brightness(device.id, value, name=device.name, path=device.path))
 
@@ -2205,6 +2260,7 @@ class Helper:
         self.devices: list[Device] = []
         # Calls that can hang on something outside the helper, each with its deadline (#66).
         self.discovery = Deadline("device discovery", DISCOVERY_SECONDS)
+        self.state_read = Deadline("reading the SidePulse service", STATE_READ_SECONDS)
         self.service_check = Deadline("the SidePulse service check", SERVICE_CHECK_SECONDS)
         self.folder_check = Deadline("the sessions' folder check", FOLDER_CHECK_SECONDS)
         self.device_count: int | None = None
@@ -2312,8 +2368,8 @@ class Helper:
         self.settings = settings
         self.bar_leds_on = settings.virtual_status_device_enabled
         try:
-            snapshot = read_snapshot()
-        except (OSError, ValueError) as exc:
+            snapshot = self.state_read.run(read_snapshot)
+        except (OSError, ValueError) as exc:  # TimeoutError included: a service that hangs
             message = str(exc)
             self.report("state", message)
             event = unavailable_state_event(message)
@@ -2909,6 +2965,10 @@ class Helper:
                 message = ("installed, then removed again: " if removed else
                            "installed, and removing them again failed (turn them off in Settings): ")
                 message += "; ".join(problems) + ("" if removed else f"; {detail}")
+                # What upstream's `setup` did that its `--uninstall` does not undo (cli.py, install.py).
+                message += (". SidePulse's install also installed and restarted its service, which stays"
+                            + ("; Codex keeps [features] hooks = true and its trusted-hook entries"
+                               if provider == "codex" else ""))
         self.emit({"type": "result", "command": f"hooks-{action}", "provider": provider, "ok": ok,
                    "message": message})
         self.refresh_hooks(force=True)

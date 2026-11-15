@@ -1,4 +1,4 @@
-"""A device's LED file is read and written only when it is a plain, short file (#55).
+"""A device's LED file is read and written only when it is a plain, short file.
 
 Upstream's discovery takes any auto-mounted volume named like a SidePulse, or holding an LED file, as a
 device, so a stick someone else made can carry a symbolic link, a FIFO or a huge file where LEDS.LED
@@ -125,7 +125,7 @@ def test_a_folder_owned_by_someone_else_is_left_alone(world, monkeypatch):
 
 
 def test_an_error_while_checking_names_the_device_and_keeps_the_helper(world, monkeypatch):
-    # A permission or I/O error on one stick must not end the helper (Codex review of #56).
+    # A permission or I/O error on one stick must not end the helper.
     (world.led.parent.parent / "SidePulsePro").mkdir()
     real_lstat = os.lstat
 
@@ -146,7 +146,7 @@ def test_an_absent_led_file_is_fine(world):
 
 @pytest.mark.parametrize("name", ["STATUS.TXT", "setup.html"])
 def test_a_fifo_control_file_leaves_the_device_alone(world, name):
-    # Upstream's read-only fallback reads these with a plain open(): a FIFO would block the helper (#62).
+    # Upstream's read-only fallback reads these with a plain open(): a FIFO would block the helper.
     world.led.write_text("brightness 128\n")
     os.mkfifo(world.led.parent / name)
     set_off(world)
@@ -168,7 +168,7 @@ def test_plain_control_files_are_fine(world):
 
 
 def test_a_rejected_device_says_the_service_may_still_write_it(world, tmp_path):
-    # Upstream's service writes LEDS.LED itself, following links; the helper can only warn (#62).
+    # Upstream's service writes LEDS.LED itself, following links; the helper can only warn.
     (tmp_path / "victim").write_text("x")
     world.led.symlink_to(tmp_path / "victim")
     set_off(world)

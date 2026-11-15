@@ -136,7 +136,7 @@ def test_a_discharging_battery_is_not_plugged(tmp_path):
 
 
 def test_a_battery_still_discharging_on_an_online_charger_is_charging(tmp_path):
-    # A ThinkPad turns BAT0/status to Charging about 5 s after the adapter goes online (#9's laptop pass):
+    # A ThinkPad turns BAT0/status to Charging about 5 s after the adapter goes online:
     # the charger is the truth, so the 7 s preview shows the charging pulse from the plug, not the unplugged look.
     write_battery(tmp_path, percent=30, status="Discharging", plugged=True)
     battery = helper.read_battery(tmp_path)

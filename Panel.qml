@@ -1080,7 +1080,7 @@ Panel {
     property int count: 2
     // Each LED's [red, green, blue], 0-255, as the helper's frame gives it; null when there are none.
     property var colours: null
-    // The colour drawn when there are no frames: the device program's first colour (#5), or dim.
+    // The colour drawn when there are no frames: the device program's first colour, or dim.
     property color colour: root.dim
     readonly property real ledSize: Style.space(4)
     readonly property real ledGap: Style.space(3)

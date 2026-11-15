@@ -23,6 +23,9 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     (tmp_path / "home").mkdir()
+    # pytest's scratch paths are long enough to send upstream's status socket to /tmp, which refuses an
+    # install (tests/test_fail_closed.py covers that); here the socket is taken as in the state folder.
+    monkeypatch.setattr(helper, "status_socket_problems", lambda folders: [])
     return tmp_path
 
 

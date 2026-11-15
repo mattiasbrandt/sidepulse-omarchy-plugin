@@ -328,6 +328,32 @@ calls it:
   folder's path is long enough that SidePulse moves its status socket, which the
   hooks report to, to a fixed name in `/tmp`, the popup says so. While the shell, and so the helper, is
   not running, SidePulse's own behaviour applies.
+- **Refuses what another account could change.** A folder counts as safe when it,
+  and every folder above it, belongs to you or root and no other account can write
+  to it (a shared folder with the sticky bit, such as `/tmp`, only when the folder
+  below it is already yours). The helper checks this before it acts, and refuses
+  instead of going ahead:
+  - turning an agent's hooks on: the state folders, what is already in them (a
+    link, or a file of another account, is refused), the agent's config folder, the
+    folder of a hook log kept elsewhere, and the status socket (refused when SidePulse
+    would put it in `/tmp`). If the check after the install still finds a problem,
+    the hooks are taken out again and the popup says why;
+  - reading the agents' state: the status socket's folder, and the socket must be
+    yours, so no other account can answer with sessions of its choosing;
+  - SidePulse's `settings.json`: not read or saved when its folder fails, or when
+    it is not your own regular file (SidePulse's defaults apply, and the popup says
+    why);
+  - the hook log, and a device's volume and every folder above it;
+  - SidePulse's device-lock folder (`~/.cache/sidepulse/device-locks/`) is kept
+    `700`, so no other account can hold a device's lock.
+  Files the helper reads for itself (agent configs, session records, transcripts,
+  settings) are opened without blocking and must be your own regular files, so a
+  FIFO put in their place never stalls the helper; configs and session records are
+  read up to 16 MiB, transcripts one line of up to 1 MiB at a time. Device
+  discovery (which stats every entry under `/mnt` and the other mount points), the
+  `systemctl` service check and the sessions' folder check run with a deadline (3,
+  3 and 2 seconds): one that hangs, such as an unreachable network mount, is named
+  in the popup and the rest of the helper goes on.
 - **Runs commands**, each only where the feature is named above:
   `systemctl --user is-active sidepulse.service` (the Setup check);
   `python -I -m sidepulse service start` in SidePulse's venv, only when you choose
@@ -356,6 +382,10 @@ calls it:
   - SidePulse's service finds and writes devices on its own, without the plugin's
     checks: it follows a `LEDS.LED` link on a stick someone else made. A device the
     plugin rejects is named in the popup with a request to eject the volume.
+  - SidePulse's hooks append to their logs by name and follow links. The helper
+    refuses to install hooks while the state folder holds a link or another
+    account's file, and names one that appears later, but hooks you installed
+    another way keep running until you turn them off.
   - SidePulse's hook creates its log folder with your umask whenever the folder is
     missing. The plugin re-creates it privately within 5 seconds while the shell
     runs, but an account that opened a log in that moment keeps it open, and with

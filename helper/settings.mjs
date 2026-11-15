@@ -99,7 +99,6 @@ const PROBLEM_TITLES = {
   lid_animation: "Lid animation",
   command: "Command",
   protocol: "Protocol",
-  watch: "Watching",
   helper: "Helper",
 }
 

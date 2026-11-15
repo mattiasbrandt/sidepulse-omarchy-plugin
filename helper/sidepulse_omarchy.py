@@ -80,6 +80,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -90,6 +91,14 @@ PROTOCOL_VERSION = 1
 HELPER_VERSION = "dev"
 TICK_SECONDS = 1.0
 SETUP_EVERY_TICKS = 5
+# The most the helper reads of a file it parses whole (agent configs, session records, settings).
+OWN_FILE_LIMIT = 16 * 1024 * 1024
+TRANSCRIPT_LINE_LIMIT = 1024 * 1024
+# Deadlines for calls that can block on a mount or a command (#66). Discovery stats every mount root
+# entry, /mnt's automounts included; the service check runs systemctl with no timeout of its own.
+DISCOVERY_SECONDS = 3.0
+SERVICE_CHECK_SECONDS = 3.0
+FOLDER_CHECK_SECONDS = 2.0
 
 # The umask upstream's CLI runs with when the plugin starts it (#62): every file it creates (agent config
 # backups, the hook-log folder and logs, the service unit) is the user's alone. A config it rewrites in
@@ -321,6 +330,30 @@ def _probe_notify() -> dict[str, Any]:
 DAEMON_UNAVAILABLE = "the SidePulse service is not running; Start service starts it"
 
 
+def state_source_problem() -> str | None:
+    """Why the service's answer cannot be trusted now, or None (#66). The helper asks the service over
+    its status socket; another account that controls the socket's folder could answer in its place,
+    with sessions and folders of its choosing that a click would then resume. The folder must pass
+    trusted_folder_problem, and the socket, when present, must be the user's own socket."""
+    from sidepulse.program_transport import status_socket_path
+    from sidepulse.providers import candidate_state_dirs
+
+    # The sockets upstream's client tries, in its order (program_transport.submit_report).
+    for path in dict.fromkeys([status_socket_path(), *(status_socket_path(d) for d in candidate_state_dirs())]):
+        problem = trusted_folder_problem(path.parent)
+        if problem is not None:
+            return f"SidePulse's status socket: {problem}"
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            continue  # no service there: read_snapshot says so when none answers
+        except OSError as exc:
+            return f"cannot check {path}: {exc}"
+        if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+            return f"{path} is not the user's own SidePulse socket"
+    return None
+
+
 def read_snapshot() -> Any:
     """The daemon's snapshot, as upstream's own menu-bar app reads it (status_bar.py build_monitor at
     20ca7fd: DaemonMonitor, snapshot(include_stale=False)). The daemon applies upstream's rules.
@@ -330,6 +363,9 @@ def read_snapshot() -> Any:
     from sidepulse.program_presentation import DaemonMonitor
     from sidepulse.program_status import StatusError
 
+    problem = state_source_problem() or settings_problem()
+    if problem is not None:
+        raise ValueError(problem)
     try:
         return DaemonMonitor().snapshot(include_stale=False)
     except StatusError as exc:
@@ -509,9 +545,12 @@ def change_settings(change: Any) -> None:
     """
     from sidepulse.settings import default_settings_path, load_settings, save_settings
 
+    problem = settings_problem()
+    if problem is not None:
+        raise OSError(errno.EPERM, f"not saving: {problem}")
     path = Path(os.path.realpath(default_settings_path()))
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = path.read_text() if path.exists() else None
+    text = read_own(path) if path.exists() else None
     if text is not None and not isinstance(json.loads(text), dict):
         raise ValueError(f"{path} is not a JSON object; not overwriting it")
     fd, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -586,6 +625,42 @@ def hooks_event(home: Path | None = None) -> dict[str, Any]:
     return {"type": "hooks", "providers": rows}
 
 
+def hook_install_problems(provider: str, home: Path | None = None) -> list[str]:
+    """Why turning this agent's hooks on would let another account read or redirect what they write (#66).
+
+    Checked before upstream's installer runs, so nothing is installed into a place that fails: each state
+    folder upstream's hooks may write to, the entries already in it, the agent's config folder (upstream
+    writes the config and its backups there), and the folder of each SidePulse hook log the agent's
+    config already names outside the state folders."""
+    from sidepulse.providers import candidate_state_dirs
+
+    folders = candidate_state_dirs(home)
+    problems = [problem for folder in folders if (problem := trusted_folder_problem(folder))]
+    for folder in folders:
+        problems += state_entry_problems(folder)
+    problems += status_socket_problems(folders)
+    row = next((row for row in hooks_event(home)["providers"] if row.get("provider") == provider), {})
+    if row.get("config_path"):
+        config = Path(row["config_path"])
+        if problem := trusted_folder_problem(config.parent):
+            problems.append(f"{provider}'s config folder: {problem}")
+    for log in sidepulse_hooks(row)[1]:
+        if any(folder in log.parents for folder in folders):
+            continue  # checked with its state folder's entries
+        if problem := trusted_folder_problem(log.parent):
+            problems.append(f"{provider}'s hook log folder: {problem}")
+        try:
+            info = os.lstat(log)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            problems.append(f"cannot check {log}: {exc}")
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            problems.append(f"{log} is not the user's own regular file")
+    return problems
+
+
 def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str]:
     """`sidepulse setup <provider>` (install) or `setup <provider> --uninstall` in the SidePulse venv
     (D4: hooks go through the CLI). Upstream's install also installs and starts its service, which the
@@ -612,6 +687,172 @@ def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str
     )
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output or f"exit {result.returncode}"
+
+
+class Deadline:
+    """Runs a call that can block on something outside the helper (an automount or NFS mount that hangs,
+    a systemctl that does not answer) on a worker thread, waiting at most `seconds` (#66).
+
+    The helper's loop is serial: one blocked call would stop its frames, commands and the sleep lock's
+    release. A call past its deadline raises TimeoutError and keeps running on its thread, and the next
+    call fails at once while it does, so a hung mount costs one thread, not one per tick."""
+
+    def __init__(self, what: str, seconds: float) -> None:
+        self.what = what
+        self.seconds = seconds
+        self.worker: threading.Thread | None = None
+
+    def run(self, call: Callable[[], Any]) -> Any:
+        if self.worker is not None and self.worker.is_alive():
+            raise TimeoutError(f"{self.what} has not finished since it passed its {self.seconds:g} s")
+        self.worker = None
+        box: dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["value"] = call()
+            except BaseException as exc:  # handed to the caller's thread below, never lost
+                box["error"] = exc
+
+        worker = threading.Thread(target=work, name=f"sidepulse-{self.what}", daemon=True)
+        worker.start()
+        worker.join(self.seconds)
+        if worker.is_alive():
+            self.worker = worker
+            raise TimeoutError(f"{self.what} did not finish within {self.seconds:g} s")
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+
+def trusted_folder_problem(folder: str | Path) -> str | None:
+    """Why another local account could change what `folder` holds, or None (#66).
+
+    Every folder on the real path, from / down, must be the user's or root's, and no other account may
+    write to it: one that can could rename the next folder away and put its own in its place, holding a
+    link or a file it can read. A shared folder with the sticky bit (such as /tmp) is fine only when the
+    next folder down already exists and is the user's own, since then no one else can rename or replace
+    it. A missing tail under folders that pass is fine: the user's own processes create it.
+    """
+    uid = os.getuid()
+    real = Path(os.path.realpath(folder))
+    shared: Path | None = None  # the sticky shared folder just above, if any
+    for part in (*reversed(real.parents), real):
+        try:
+            info = os.lstat(part)
+        except FileNotFoundError:
+            if shared is not None:
+                return f"{shared} is shared with other accounts, and one could create {part} first"
+            return None
+        except OSError as exc:
+            return f"cannot check {part}: {exc}"
+        if not stat.S_ISDIR(info.st_mode):
+            return f"{part} is not a folder"
+        if shared is not None and info.st_uid != uid:
+            return f"{part} is in the shared folder {shared} and belongs to another account"
+        if info.st_uid not in (0, uid):
+            return f"{part} belongs to another account"
+        shared = None
+        if info.st_mode & 0o022:
+            if not info.st_mode & stat.S_ISVTX:
+                return f"{part} can be written by another account"
+            shared = part
+    if shared is not None:
+        return f"{real} is shared with other accounts"
+    return None
+
+
+def open_own(path: str | Path, limit: int | None = OWN_FILE_LIMIT) -> Any:
+    """Open, for reading in binary, a file the helper reads for itself (#66).
+
+    Opened without blocking, so a FIFO put in its place never stalls the helper's loop; then it must be
+    a regular file the user owns, of at most `limit` bytes. A link is followed (agent configs are often
+    linked from a dotfiles checkout); what it names must pass the same checks. Raises OSError naming why.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", str(path))
+        if info.st_uid != os.getuid():
+            raise OSError(errno.EPERM, "belongs to another account", str(path))
+        if limit is not None and info.st_size > limit:
+            raise OSError(errno.EFBIG, f"larger than {limit} bytes", str(path))
+        os.set_blocking(fd, True)
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def read_own(path: str | Path, limit: int = OWN_FILE_LIMIT) -> str:
+    """The text of a file open_own accepts, read no further than `limit` bytes."""
+    with open_own(path, limit) as handle:
+        return handle.read(limit).decode(errors="replace")
+
+
+def settings_problem() -> str | None:
+    """Why upstream's settings.json must not be read or saved now, or None (#66). Its real folder must
+    pass trusted_folder_problem, and the file, when present, must be the user's own regular file: a FIFO
+    would block upstream's plain read, and a save through a folder another account controls would
+    replace whatever file that account chose."""
+    from sidepulse.settings import default_settings_path
+
+    path = Path(os.path.realpath(default_settings_path()))
+    problem = trusted_folder_problem(path.parent)
+    if problem is not None:
+        return f"SidePulse's settings: {problem}"
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"cannot check {path}: {exc}"
+    if not stat.S_ISREG(info.st_mode):
+        return f"{path} is not a regular file"
+    if info.st_uid != os.getuid():
+        return f"{path} belongs to another account"
+    return None
+
+
+def load_own_settings() -> Any:
+    """Upstream's load_settings, when settings_problem finds nothing; otherwise upstream's defaults, as
+    upstream's own load_settings gives for a settings.json it cannot read. The problem is reported by
+    the helper's state refresh."""
+    from sidepulse.settings import AgentMonitorSettings, load_settings
+
+    if settings_problem() is not None:
+        return AgentMonitorSettings()
+    return load_settings()
+
+
+def state_entry_problems(folder: Path) -> list[str]:
+    """Entries in a state folder that SidePulse's hooks would write through or another account owns (#66).
+
+    Making the folder 700 does not undo a link planted while it was open: upstream's hooks append to
+    their logs by name and follow it. The service's own socket is the one non-file entry it keeps."""
+    uid = os.getuid()
+    try:
+        entries = list(os.scandir(folder))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError as exc:
+        return [f"cannot check {folder}: {exc}"]
+    problems = []
+    for entry in entries:
+        try:
+            info = entry.stat(follow_symlinks=False)
+        except OSError as exc:
+            problems.append(f"cannot check {entry.path}: {exc}")
+            continue
+        if stat.S_ISLNK(info.st_mode):
+            problems.append(f"{entry.path} is a symbolic link; SidePulse's hooks would write through it")
+        elif not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)
+                  or (stat.S_ISSOCK(info.st_mode) and entry.name.endswith(".sock"))):
+            problems.append(f"{entry.path} is not a regular file")
+        elif info.st_uid != uid:
+            problems.append(f"{entry.path} belongs to another account")
+    return problems
 
 
 def make_private(path: Path, folder: bool) -> str | None:
@@ -669,7 +910,7 @@ def sidepulse_hooks(row: dict[str, Any]) -> tuple[bool, list[Path]]:
     taken as SidePulse's only when it appears on a line of the config that carries a SidePulse hook.
     Upstream writes each hook command on one line (JSON strings, TOML values)."""
     try:
-        text = Path(row["config_path"]).read_text(errors="replace")
+        text = read_own(row["config_path"])
     except (KeyError, OSError):
         return False, []
     lines = [line for line in text.splitlines() if any(marker in line for marker in SIDEPULSE_HOOK_MARKERS)]
@@ -719,8 +960,12 @@ def keep_hook_logs_private(home: Path | None = None) -> list[str]:
     folder is created 700 first, so upstream's hook never creates it with the umask: the hook always
     writes its audit log (event-status.jsonl, with prompt previews) there, wherever the agent's own log
     goes. A SidePulse hook log configured outside the state folders is created empty at 600 when missing,
-    and loses group and other access when present; its folder is someone else's choice and is left alone.
-    Upstream's backups of agent configs lose group and other access too.
+    and loses group and other access when present; its folder is someone else's choice and is left alone,
+    but named when another account could change it (#66). Upstream's backups of agent configs lose group
+    and other access too, and so does upstream's device-lock folder.
+
+    A private folder does not undo what was planted while it was open, so a state folder another account
+    can change, and an entry in it that is a link or someone else's, are named too (#66).
     """
     from sidepulse.providers import candidate_state_dirs
 
@@ -741,9 +986,18 @@ def keep_hook_logs_private(home: Path | None = None) -> list[str]:
         problems += [problem for log in outside if (problem := create_private(log, folder=False))]
         problems += status_socket_problems(folders)
     problems += [problem for folder in folders if (problem := make_private(folder, folder=True))]
+    problems += [problem for folder in folders if (problem := trusted_folder_problem(folder))]
+    for folder in folders:
+        problems += state_entry_problems(folder)
     problems += [problem for log in outside if (problem := make_private(log, folder=False))]
+    problems += [f"hook log folder: {problem}" for log in outside
+                 if (problem := trusted_folder_problem(log.parent))]
     problems += [problem for path, folder in backups if (problem := make_private(path, folder=folder))]
-    return problems
+    # Upstream's writer serializes device writes with flock on files there (device_writer.device_write_lock);
+    # another account able to open one could hold the lock and stall every LED write.
+    locks = (home or Path.home()) / ".cache" / "sidepulse" / "device-locks"
+    problems += [problem for problem in (make_private(locks, folder=True), trusted_folder_problem(locks)) if problem]
+    return list(dict.fromkeys(problems))
 
 
 def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict[str, Any]:
@@ -755,10 +1009,22 @@ def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict
     from sidepulse.audit import AUDIT_COLUMNS, default_status_audit_log_path, read_recent_lines
 
     source = path or default_status_audit_log_path()
+    # Upstream reads the log by name with a plain open() and no size limit. Read it only in a folder no
+    # other account can change and when it is the user's own regular file, so it cannot be a FIFO that
+    # blocks the helper or a file someone else filled (#66). Its size is the user's own hooks' doing.
+    problem = trusted_folder_problem(source.parent)
+    if problem is not None:
+        raise OSError(errno.EPERM, f"not reading {source}: {problem}")
+    try:
+        info = os.lstat(source)
+    except FileNotFoundError:
+        return {"type": "log", "rows": []}  # no hook has run yet; anything else is reported by the caller
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise OSError(errno.EPERM, f"not reading {source}: not the user's own regular file")
     try:
         lines = read_recent_lines(source, limit)
     except FileNotFoundError:
-        return {"type": "log", "rows": []}  # no hook has run yet; anything else is reported by the caller
+        return {"type": "log", "rows": []}
     rows: list[dict[str, Any]] = []
     for line in lines:
         try:
@@ -842,12 +1108,11 @@ def apply_display(device: Device, display: str, program: str | None = None) -> N
     """
     from sidepulse.led_status import builtin_animation_program
     from sidepulse.device_writer import normalize_led_text, write_led_program
-    from sidepulse.settings import load_settings
 
     if display == "off":
         program = builtin_animation_program("off", device.led_count)
     upstream = "agent" if program is None else "custom"
-    if load_settings().display_for_device(device.id) != upstream:
+    if load_own_settings().display_for_device(device.id) != upstream:
         change_settings(
             lambda s: s.with_device_display(device.id, upstream, name=device.name, path=device.path))
     if upstream == "custom":
@@ -881,9 +1146,11 @@ def led_file_problem(target: str | Path) -> str | None:
     helper's loop, and a huge file would be read every second (#55). A program never exceeds upstream's
     MAX_LED_BYTES.
 
-    The folder holding the file must be the user's own and writable by no one else: upstream's writer
-    opens the file again by name, so another local account able to write there could swap in a link
-    between this check and the write. A check that fails with an error names that error.
+    The folder holding the file, and every folder above it, must be one no other account can change
+    (trusted_folder_problem; the volume itself must be the user's own): upstream's writer opens the file
+    again by name, so another local account able to write there, or to rename a folder on the way, could
+    swap in a link between this check and the write (#55, #66). A check that fails with an error names
+    that error.
     """
     from sidepulse.device_writer import MAX_LED_BYTES
 
@@ -892,8 +1159,10 @@ def led_file_problem(target: str | Path) -> str | None:
         folder = os.lstat(path.parent)
         if not stat.S_ISDIR(folder.st_mode):
             return f"{path.parent} is not a folder; leaving it alone"
-        if folder.st_uid != os.getuid() or folder.st_mode & 0o022:
-            return f"{path.parent} can be written by another account; leaving {path.name} alone"
+        if folder.st_uid != os.getuid():
+            return f"{path.parent} belongs to another account; leaving {path.name} alone"
+        if problem := trusted_folder_problem(path.parent):
+            return f"{problem}; leaving {path.name} alone"
         info: os.stat_result | None = os.lstat(path)
     except FileNotFoundError:
         if not os.path.isdir(path.parent):
@@ -1256,7 +1525,7 @@ def claude_session_ids(proc: Proc, home: Path) -> dict[int, str]:
     owners: dict[int, str] = {}
     for path in root.glob("*.json"):
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(read_own(path))
         except (OSError, ValueError):
             continue
         pid = int(data["pid"])
@@ -1271,7 +1540,7 @@ def claude_pid(session_id: str, proc: Proc, home: Path) -> int | None:
 
 def grok_pid(session_id: str, proc: Proc, home: Path) -> int | None:
     try:
-        entries = json.loads((home / ".grok" / "active_sessions.json").read_text())
+        entries = json.loads(read_own(home / ".grok" / "active_sessions.json"))
     except (OSError, ValueError):
         return None
     for entry in entries:
@@ -1327,9 +1596,11 @@ def ai_title(session_id: str, cwd: str, home: Path) -> str | None:
     transcript = root / cwd.replace("/", "-") / f"{session_id}.jsonl"
     title = None
     try:
-        with transcript.open() as handle:
-            for line in handle:
-                if '"ai-title"' in line:
+        with open_own(transcript, limit=None) as handle:
+            # A transcript grows with its session, so its size is not capped; a line is, so a file
+            # without newlines is never read whole.
+            while line := handle.readline(TRANSCRIPT_LINE_LIMIT):
+                if b'"ai-title"' in line and line.endswith(b"\n"):
                     title = json.loads(line).get("aiTitle") or title
     except OSError:
         return None
@@ -1932,6 +2203,10 @@ class Helper:
         # The statuses the popup lists, from the last good read of the service (D19 rule: none while unreadable).
         self.session_statuses: list[Any] = []
         self.devices: list[Device] = []
+        # Calls that can hang on something outside the helper, each with its deadline (#66).
+        self.discovery = Deadline("device discovery", DISCOVERY_SECONDS)
+        self.service_check = Deadline("the SidePulse service check", SERVICE_CHECK_SECONDS)
+        self.folder_check = Deadline("the sessions' folder check", FOLDER_CHECK_SECONDS)
         self.device_count: int | None = None
         # The widget's remembered displays. None until it sends them: a fresh
         # helper must not reset devices before it knows what the user chose.
@@ -2031,10 +2306,8 @@ class Helper:
     def refresh_state(self, force: bool = False) -> None:
         if not self.capabilities.get("state", {}).get("ok"):
             return
-        from sidepulse.settings import load_settings
-
         statuses: list[Any] = []
-        settings = load_settings()
+        settings = load_own_settings()
         self.refresh_settings(settings, force)
         self.settings = settings
         self.bar_leds_on = settings.virtual_status_device_enabled
@@ -2057,7 +2330,14 @@ class Helper:
             self.active_count = snapshot.aggregate.active_count
             self.state_readable = True
             if self.capabilities["sessions"]["ok"]:
-                statuses = listed_sessions(snapshot, settings.recent_session_retention_seconds)
+                try:
+                    statuses = self.folder_check.run(
+                        lambda: listed_sessions(snapshot, settings.recent_session_retention_seconds))
+                except TimeoutError as exc:
+                    # A session folder on a mount that hangs: list nothing rather than guess (D19 rule).
+                    self.report("sessions", f"cannot check the sessions' folders: {exc}")
+                else:
+                    self.resolve("sessions")
             self.note_asks(asking_sessions(snapshot.statuses))
         if force or event != self.last_state:
             self.last_state = event
@@ -2121,8 +2401,8 @@ class Helper:
             from sidepulse.service_launch import service_is_running
 
             try:
-                service_running = service_is_running()
-            except (OSError, subprocess.SubprocessError) as exc:
+                service_running = self.service_check.run(service_is_running)
+            except (OSError, subprocess.SubprocessError) as exc:  # TimeoutError is an OSError
                 self.report("service", f"cannot check the SidePulse service: {exc}")
             else:
                 self.resolve("service")
@@ -2138,8 +2418,8 @@ class Helper:
             return
         unsafe = False
         try:
-            found, refused = discover_device_rows()
-        except OSError as exc:
+            found, refused = self.discovery.run(discover_device_rows)
+        except OSError as exc:  # TimeoutError included: a mount root such as /mnt that hangs
             self.report("devices", f"cannot look for SidePulse devices: {exc}")
             self.devices = []
             self.device_count = None
@@ -2152,13 +2432,12 @@ class Helper:
                 # (service.py), so the helper's refusal cannot protect the volume by itself (#62).
                 self.report("devices", f"{name}: {problem}. {SERVICE_WRITES_UNCHECKED}")
             from sidepulse.device_writer import DeviceWriteError
-            from sidepulse.settings import load_settings
 
             self.device_count = len(self.devices)
             failed = unsafe
             # Nothing is reconciled until the widget has sent its remembered displays.
             pending = self.devices if self.displays is not None else []
-            settings = load_settings()
+            settings = load_own_settings()
             now = self.clock()
             for device in pending:
                 display = display_of(self.displays, device.id, self.battery_offered, alias=device.path)
@@ -2171,9 +2450,7 @@ class Helper:
             if not failed:
                 self.resolve("devices")
         # The program each device holds now, at full brightness: its LED frames play it (the popup's device rows, D21).
-        from sidepulse.settings import load_settings
-
-        settings = load_settings()
+        settings = load_own_settings()
         self.device_programs = {
             device.id: full_brightness_program(self.read_program(device), settings.brightness_for_device(device.id))
             for device in self.devices
@@ -2196,9 +2473,7 @@ class Helper:
         return colour_of(self.read_program(device))
 
     def devices_event(self) -> dict[str, Any]:
-        from sidepulse.settings import load_settings
-
-        settings = load_settings()
+        settings = load_own_settings()
         items = []
         for device in self.devices:
             items.append({
@@ -2245,9 +2520,7 @@ class Helper:
     def refresh_power(self) -> None:
         """Read the battery and the lid once a tick (D10). Emits `power`; a plug or unplug starts the
         7 s preview (upstream's battery_show_on_power_change); the lid's change starts its animation."""
-        from sidepulse.settings import load_settings
-
-        settings = load_settings()
+        settings = load_own_settings()
         now = self.clock()
         battery_cap = self.capabilities.get("battery", {}).get("ok") is True
         battery = self.read_battery_or_none()
@@ -2477,9 +2750,7 @@ class Helper:
 
     def refresh_awake(self) -> None:
         """Hold or release the sleep lock to match the policy, and report what it does."""
-        from sidepulse.settings import load_settings
-
-        settings = load_settings()
+        settings = load_own_settings()
         policy = settings.sleep_prevention_policy
         battery = self.read_battery_or_none()
         threshold = settings.sleep_prevention_min_battery_percent
@@ -2605,21 +2876,49 @@ class Helper:
         if provider not in HOOK_PROVIDERS:
             self.error("command", f"{action} needs a provider: one of {', '.join(HOOK_PROVIDERS)}")
             return
+        if action == "install":
+            # Fail closed (#66): no hooks into a folder another account can change or read.
+            try:
+                problems = hook_install_problems(provider)
+            except (OSError, ValueError) as exc:
+                problems = [f"cannot check where the hooks would write: {exc}"]
+            if problems:
+                self.report("hook_privacy", "; ".join(problems))
+                self.emit({"type": "result", "command": "hooks-install", "provider": provider, "ok": False,
+                           "message": "not installed: " + "; ".join(problems)})
+                return
         try:
             ok, message = run_hook_command(action, provider, sys.executable)
         except (OSError, subprocess.SubprocessError) as exc:
             ok, message = False, f"cannot run the SidePulse CLI: {exc}"
         if action == "install":  # also after a failed one: it may have created the logs before failing
             self.keep_hook_logs_private()
+            # The same check as before the install, now also over what the installer created.
+            try:
+                problems = hook_install_problems(provider)
+            except (OSError, ValueError) as exc:
+                problems = [f"cannot check where the hooks write: {exc}"]
+            if problems:
+                # The installer's own files failed the privacy pass: take the hooks out again, so none
+                # stay active writing where another account can read (#66, marketplace review round 5).
+                try:
+                    removed, detail = run_hook_command("uninstall", provider, sys.executable)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    removed, detail = False, f"cannot run the SidePulse CLI: {exc}"
+                ok = False
+                message = ("installed, then removed again: " if removed else
+                           "installed, and removing them again failed (turn them off in Settings): ")
+                message += "; ".join(problems) + ("" if removed else f"; {detail}")
         self.emit({"type": "result", "command": f"hooks-{action}", "provider": provider, "ok": ok,
                    "message": message})
         self.refresh_hooks(force=True)
         self.refresh_log(force=True)
 
-    def keep_hook_logs_private(self) -> None:
-        """keep_hook_logs_private, its problems reported once on their own line until they clear (#58, #62)."""
+    def keep_hook_logs_private(self) -> list[str]:
+        """keep_hook_logs_private, its problems reported once on their own line until they clear (#58, #62);
+        returns them."""
         if not self.capabilities.get("hooks", {}).get("ok"):
-            return
+            return []
         try:
             problems = keep_hook_logs_private()
         except (OSError, ValueError) as exc:
@@ -2628,6 +2927,7 @@ class Helper:
             self.report("hook_privacy", "; ".join(problems))
         else:
             self.resolve("hook_privacy")
+        return problems
 
     # --- Notify when a session asks (D20) ---
 

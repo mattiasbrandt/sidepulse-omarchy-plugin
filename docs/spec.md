@@ -100,6 +100,19 @@ _Filled in during grilling, one entry per answered question._
     Python helper in the plugin repo that imports upstream's own code from
     the SidePulse venv (aggregate rules, settings load/save, keep-awake
     predicate, `sdled.wasm`). Each gap is shaped as a future upstream PR.
+  - *Amended in #65 (upstream 20ca7fd):* upstream's service no longer writes
+    `latest.json` (nothing starts `LiveAgentMonitor`); it holds the agents' status in
+    memory and answers `get_state` on its status socket. The adapter's state source is
+    now upstream's `program_presentation.DaemonMonitor().snapshot()`, the call
+    upstream's own menu-bar app makes (`status_bar.py` `build_monitor`), polled each
+    one-second tick; the directory watch and the helper's own pass of the aggregate
+    rules are gone, since the service applies them. A stopped service is the State
+    "unavailable" with that reason (as an unreadable `latest.json` was), never the last
+    state. The service forgets a finished session after 20 minutes (`ProgramMonitor`)
+    and no longer reads the idle timeout, so both settings only reach as far as the
+    service keeps; the popup shows what upstream's own menu shows. Upstream's sleep and
+    lid rules moved from `status_bar.py` into `daemon_runtime.py`, which imports on
+    Linux, so the helper calls them instead of keeping AST-checked copies.
 - **D5 Helper lifecycle:** the widget spawns the helper as a child process and
   reads NDJSON from its stdout. No extra unit or install step. Shell restart
   restarts the helper and releases any keep-awake inhibitor (safe failure).
@@ -330,6 +343,17 @@ _Filled in during grilling, one entry per answered question._
   Upstream's service discovers and writes devices on its own (`service.py`), without
   these checks, so a rejected device's problem line also says the service may still
   write it and asks to eject the volume. The helper cannot constrain another process.
+  *Amended in #65 (upstream 20ca7fd):* the service keys a device's settings by
+  upstream's `device_id` (`sidepulse:<serial>` from `STATUS.TXT`, else the mount root)
+  and migrates path-keyed entries to it, so the helper takes the same id and reads a
+  Display remembered under the mount path as the fallback. Upstream's
+  `discover_devices` reads each volume's `STATUS.TXT` with a plain `open()` before
+  anything can check it, so the helper calls its two steps apart
+  (`discover_mounted_devices`, then `describe_mounted_device`) with the LED and
+  control-file check between them; a FIFO there no longer blocks the helper. That
+  also skips upstream's USB scan: a Dot reached only over USB has no LED file to read
+  back, so it stays with the service. The product is the model upstream read from
+  `STATUS.TXT`, else its LED count rule.
 - **D10 Laptop features: helper only, no upstream PR.** The helper reads
   `/sys/class/power_supply` and logind lid state, builds upstream's battery
   snapshot and calls upstream's `program_for_battery` / lid animation
@@ -355,6 +379,10 @@ _Filled in during grilling, one entry per answered question._
   most of its time. `Not charging` (a charge limit) and `Full` keep their own look.
   Until `power_now` reports the intake (0 W), the pulse is upstream's 180 ms one, as
   `charging_pulse_length_ms(0)` gives; it changes once the wattage arrives.
+  *Amended in #65:* the two lid rules are upstream's own functions in
+  `daemon_runtime.py` (20ca7fd), called rather than copied. Upstream's daemon runs
+  its battery, keep-awake and lid code only on macOS (`is_mac`), so on Linux the
+  helper still does all three and nothing runs twice.
 - **D11 Keep-awake scope (Mac parity):** helper holds
   `systemd-inhibit --what=sleep:handle-lid-switch` while upstream's predicate
   says hold (Working/Tool Running/Long Task, 300 s grace after
@@ -395,6 +423,8 @@ _Filled in during grilling, one entry per answered question._
   a failed child is reported there too. The notice reads the percent with its decimal
   as upstream's `format_percent_value` does, and writes the unit with a space.
   Tests: `tests/test_safeguard_notice.py`.
+  *Amended in #65:* `awake_policy_should_hold` and `sleep_prevention_battery_safeguard`
+  are upstream's own, from `daemon_runtime.py` (20ca7fd), called rather than copied.
 - **D12 Bar icon:** always shown. Muted when Idle; upstream state colours
   (Working #00AEEF, Done #22B14C, Ask #FF8A00) so the icon matches the
   physical LED; Ask also sets `active` (urgent highlight). Tooltip: state,
@@ -469,6 +499,12 @@ _Filled in during grilling, one entry per answered question._
   problem. Problems show once on their own line ("Hook log privacy") and clear
   when solved. While no helper runs (no Omarchy shell), upstream's own
   behaviour applies; that is upstream's to change.
+  *Amended in #65 (upstream 20ca7fd):* a hook switch runs `sidepulse setup <agent>`
+  (on) or `setup <agent> --uninstall` (off); `agent-monitor` is gone. Turning hooks on
+  also installs and restarts upstream's service, which the hooks now report to.
+  Upstream's Codex trust step runs in the home folder. The `/tmp` socket the popup
+  names is the status socket (`program_transport.status_socket_path`); the relay
+  socket rule it used to read is gone.
 - **D14 Upstream compatibility:** feature-detect, fail loudly. The helper
   probes imports / CLI subcommands / JSON keys at start; each missing
   capability disables only its feature with a visible reason in the popup.
@@ -476,6 +512,15 @@ _Filled in during grilling, one entry per answered question._
   is added behind the same interface when the Rust build ships. That build
   also ships upstream's own KSNI tray icon: README will say to keep only one
   (disable the KSNI tray on Omarchy, or hide this widget).
+  *Amended in #65:* the tested commit is 20ca7fd. Upstream's installer tracks
+  `main` and the marketplace review audits against it, so a pinned commit the
+  installer cannot give new users is not a support target. Every probe that guards a
+  20ca7fd contract names something 6d55225 lacks (`program_presentation.DaemonMonitor`,
+  `program_transport.status_socket_path`, `device_writer.discover_mounted_devices`),
+  so on an older install state, hooks and devices fail with a reason instead of
+  reading a file nothing updates or running a removed command. At 6d55225 every probe
+  passed while state, hooks and device keys were broken: a probe must check the
+  contract a feature relies on, not only that a module imports.
 - **D15 Verification scope:** pytest for the helper against upstream's own
   code (state mapping, settings round-trip, keep-awake predicate, battery
   parsing from fixture `/sys` trees, wasm frames vs upstream Python);

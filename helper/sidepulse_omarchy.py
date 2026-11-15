@@ -7,7 +7,7 @@ commands, one JSON object per line, from stdin. It exits when stdin closes.
 Events (stdout):
   hello     protocol, helper and upstream versions, capabilities {feature: {ok, reason}}
   state     four-state label and colour, urgent (Ask), active_count, top session;
-            "unavailable" with a reason while latest.json cannot be read
+            "unavailable" with a reason while the SidePulse service cannot be read
   setup     ordered items still missing (install, service, device) with an action
   result    outcome of a command that changes something (start-service)
   error     a feature failed or a command was refused; the message says why
@@ -66,8 +66,6 @@ It never binds events.sock: that socket belongs to upstream's service (D4).
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.util
 import errno
 import importlib
 import importlib.metadata
@@ -79,13 +77,12 @@ import select
 import shutil
 import signal
 import stat
-import struct
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
@@ -135,6 +132,8 @@ DISPLAYS = ("agent", "battery", "off")
 DEFAULT_DISPLAY = "agent"
 UPSTREAM_DISPLAY = {"agent": "agent", "battery": "custom", "off": "custom"}
 PRODUCT_NAMES = {"dot": "SidePulse Dot", "pro": "SidePulse Pro"}
+# Upstream's model names, read from a device's STATUS.TXT (device_writer.describe_mounted_device).
+PRODUCT_KINDS = {name: kind for kind, name in PRODUCT_NAMES.items()}
 # LED frames (D6): upstream's virtual_device.py FRAME_RATE and IDLE_FRAME_RATE. A
 # drift test in tests/test_bar_leds.py reads both from upstream's source.
 FRAME_RATE = 60.0
@@ -144,7 +143,7 @@ FRAME_BUDGET_MS = 1000.0 / FRAME_RATE
 NOTCH_DEVICE_ID = "virtual:status-bar"
 
 # Upstream's four-state UI mapping is `state_for_mode` in status_bar.py (lines
-# 461-472 at upstream 6d55225). That module needs PyObjC, so it cannot be
+# 455-466 at upstream 20ca7fd). That module needs PyObjC, so it cannot be
 # imported on Linux and the mapping is copied here. tests/test_state.py reads
 # the upstream source and fails when the mapping or the colours drift.
 MODE_STATES = {
@@ -164,14 +163,10 @@ STATE_COLOURS = {"ask": "#FF8A00", "working": "#00AEEF", "done": "#22B14C", "idl
 # Upstream names each feature needs. A missing one disables only that feature.
 REQUIRED_NAMES = {
     "state": {
-        "sidepulse.collector": (
-            "agent_status_from_dict",
-            "snapshot_from_statuses",
-            "COMPLETED_VISIBLE_SECONDS",
-            "IDLE_VISIBLE_SECONDS",
-            "POST_TOOL_WORKING_VISIBLE_SECONDS",
-        ),
-        "sidepulse.ipc": ("default_latest_state_path",),
+        # Status lives in upstream's daemon (the service) since 20ca7fd; latest.json is no longer written.
+        "sidepulse.program_presentation": ("DaemonMonitor", "DaemonMonitor.snapshot"),
+        "sidepulse.program_transport": ("daemon_command", "status_socket_path"),
+        "sidepulse.program_status": ("StatusError",),
         "sidepulse.settings": ("load_settings",),
     },
     "sessions": {
@@ -180,13 +175,16 @@ REQUIRED_NAMES = {
     },
     "service": {"sidepulse.service_launch": ("service_is_running",)},
     "devices": {
-        "sidepulse.device_writer": ("discover_devices", "write_led_program", "MAX_LED_BYTES"),
+        "sidepulse.device_writer": ("discover_mounted_devices", "describe_mounted_device",
+                                    "write_led_program", "MAX_LED_BYTES"),
         "sidepulse.settings": ("load_settings", "save_settings"),
         "sidepulse.led_status": ("led_count_for_target", "builtin_animation_program"),
     },
     "hooks": {
         "sidepulse.providers": ("detect_provider_configs", "HOOK_PROVIDERS", "candidate_state_dirs"),
         "sidepulse.cli": ("sidepulse_main",),
+        # The hooks report to the service's status socket (20ca7fd); the helper names it when it leaves /tmp.
+        "sidepulse.program_transport": ("status_socket_path",),
     },
     "hook_log": {
         "sidepulse.audit": ("default_status_audit_log_path", "read_recent_lines", "AUDIT_COLUMNS"),
@@ -202,6 +200,7 @@ REQUIRED_NAMES = {
     "keep_awake": {
         "sidepulse.keep_awake": ("KeepAwakeController", "KeepAwakeController.should_hold_for_mode",
                                  "AWAKE_GRACE_SECONDS", "format_duration"),
+        "sidepulse.daemon_runtime": ("awake_policy_should_hold", "sleep_prevention_battery_safeguard"),
         "sidepulse.battery": ("BatterySnapshot",),
         "sidepulse.settings": ("load_settings", "SLEEP_PREVENTION_CHOICES"),
     },
@@ -216,6 +215,7 @@ REQUIRED_NAMES = {
         "sidepulse.settings": ("LID_ANIMATION_CLOSED", "LID_ANIMATION_OPEN", "AgentMonitorSettings.lid_animation",
                                "AgentMonitorSettings.sleep_prevention_policy"),
         "sidepulse.device_writer": ("normalize_led_text", "validate_led_text", "DeviceWriteError"),
+        "sidepulse.daemon_runtime": ("lid_closed_led_state_should_hold", "lid_close_animation_should_run"),
         "sidepulse.led_status": ("apply_brightness", "builtin_animation_program"),
     },
     # The Bar LEDs' frames (D6): upstream's engine resource and error names, its programs and its animation settings.
@@ -247,12 +247,6 @@ INHIBIT_REASON = "systemd-inhibit is not installed; keeping the machine awake ne
 NO_AGENT = "no agent is working"
 # Upstream's modes that hold at once; the finished ones (completed, ask, error) hold for the grace.
 WORKING_MODE_VALUES = frozenset({"working", "tool_running", "long_task_progress"})
-
-IN_MOVED_TO = 0x80
-IN_CLOSE_WRITE = 0x08
-IN_CREATE = 0x100
-IN_NONBLOCK = 0o4000
-IN_CLOEXEC = 0o2000000
 
 
 def state_for_mode(mode: str) -> str:
@@ -324,43 +318,27 @@ def _probe_notify() -> dict[str, Any]:
     return {"ok": True, "reason": ""}
 
 
-def snapshot_from_statuses(statuses: list[Any], *, now: datetime, idle_timeout_seconds: float) -> Any:
-    """Upstream's aggregate rules, with the arguments status_bar.py passes (build_monitor)."""
-    from sidepulse.collector import (
-        COMPLETED_VISIBLE_SECONDS,
-        IDLE_VISIBLE_SECONDS,
-        POST_TOOL_WORKING_VISIBLE_SECONDS,
-        snapshot_from_statuses as upstream_snapshot,
-    )
-
-    return upstream_snapshot(
-        tuple(statuses),
-        sources=(),
-        collected_at=now,
-        stale_after_seconds=idle_timeout_seconds,
-        tool_running_timeout_seconds=0.0,
-        completed_visible_seconds=COMPLETED_VISIBLE_SECONDS,
-        idle_visible_seconds=IDLE_VISIBLE_SECONDS,
-        post_tool_working_visible_seconds=POST_TOOL_WORKING_VISIBLE_SECONDS,
-    )
+DAEMON_UNAVAILABLE = "the SidePulse service is not running; Start service starts it"
 
 
-def read_snapshot(latest_path: Path, *, now: datetime, idle_timeout_seconds: float) -> Any:
-    """Read latest.json (the service writes it) and apply upstream's rules.
+def read_snapshot() -> Any:
+    """The daemon's snapshot, as upstream's own menu-bar app reads it (status_bar.py build_monitor at
+    20ca7fd: DaemonMonitor, snapshot(include_stale=False)). The daemon applies upstream's rules.
 
-    A missing file is an empty snapshot. Unreadable or malformed JSON raises.
+    Raises ValueError with a reason when the daemon is not running or its reply is not a snapshot.
     """
-    from sidepulse.collector import agent_status_from_dict
+    from sidepulse.program_presentation import DaemonMonitor
+    from sidepulse.program_status import StatusError
 
     try:
-        text = latest_path.read_text()
-    except FileNotFoundError:
-        text = '{"statuses": []}'
-    data = json.loads(text)
-    if not isinstance(data, dict) or not isinstance(data.get("statuses", []), list):
-        raise ValueError(f"{latest_path} is not a SidePulse state file")
-    statuses = [s for s in (agent_status_from_dict(row) for row in data.get("statuses", [])) if s is not None]
-    return snapshot_from_statuses(statuses, now=now, idle_timeout_seconds=idle_timeout_seconds)
+        return DaemonMonitor().snapshot(include_stale=False)
+    except StatusError as exc:
+        if isinstance(exc.__cause__, (FileNotFoundError, ConnectionRefusedError)):
+            raise ValueError(DAEMON_UNAVAILABLE) from exc
+        raise ValueError(f"the SidePulse service did not answer: {exc}") from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        # An error reply ({"ok": false, "error": ...}) or a snapshot of a shape this helper does not know.
+        raise ValueError(f"the SidePulse service sent no snapshot: {exc!r}") from exc
 
 
 def state_event(snapshot: Any) -> dict[str, Any]:
@@ -379,7 +357,7 @@ def state_event(snapshot: Any) -> dict[str, Any]:
 
 
 def unavailable_state_event(reason: str) -> dict[str, Any]:
-    """Replaces the last state when latest.json cannot be read, so the bar never shows a stale one."""
+    """Replaces the last state when the SidePulse service cannot be read, so the bar never shows a stale one."""
     return {
         "type": "state",
         "state": "unavailable",
@@ -462,7 +440,7 @@ def start_service(python: str) -> tuple[bool, str]:
 class Device:
     """A mounted SidePulse device, as upstream's discover_devices finds it (D21, D23)."""
 
-    id: str  # upstream's device id: the mount root, as the service keys it
+    id: str  # upstream's device id, as the service keys it: "sidepulse:<serial>", else the mount root
     name: str
     path: str
     target: Path  # the LEDS.LED file the program is written to
@@ -474,25 +452,43 @@ class Device:
         return PRODUCT_NAMES[self.kind]
 
 
-def discover_device_rows() -> list[Device]:
-    """Upstream's discovery. The LED count is upstream's own rule (by the mount's name);
-    a device it cannot name is reported as a Pro, the 8-LED default."""
-    from sidepulse.device_writer import discover_devices
+def discover_device_rows() -> tuple[list[Device], list[tuple[str, str]]]:
+    """Upstream's discovery of mounted devices, with the LED file check before upstream reads the volume.
+
+    The two steps are upstream's own (device_writer at 20ca7fd: discover_mounted_devices, then
+    describe_mounted_device, which reads STATUS.TXT with a plain open). discover_devices runs both in one
+    call, so a FIFO STATUS.TXT on a volume someone else made would block the helper before any check;
+    calling them apart puts led_file_problem between them. A volume that fails the check is returned
+    with its problem and is never read. discover_devices also enumerates Dots over USB; the helper drives
+    only mounted devices, so it skips that step and leaves USB-only Dots to SidePulse's service.
+
+    The id is the one upstream's service keys the device's settings by (service.py _sync_outputs:
+    device_id, else the mount root). The product is the model upstream read from STATUS.TXT, else its
+    LED count rule (a device it cannot name is a Pro, the 8-LED default).
+    """
+    from sidepulse.device_writer import describe_mounted_device, discover_mounted_devices
     from sidepulse.led_status import led_count_for_target
 
     rows: list[Device] = []
-    for candidate in discover_devices():
-        root = candidate.root.expanduser()
-        led_count = led_count_for_target(candidate.target)
+    refused: list[tuple[str, str]] = []
+    for found in discover_mounted_devices():
+        root = found.root.expanduser()
+        problem = led_file_problem(found.target)
+        if problem is not None:
+            refused.append((root.name, problem))
+            continue
+        candidate = describe_mounted_device(found)
+        led_count = candidate.led_count or led_count_for_target(candidate.target)
+        kind = PRODUCT_KINDS.get(candidate.model) or ("dot" if led_count == 2 else "pro")
         rows.append(Device(
-            id=str(root),
+            id=candidate.device_id or str(root),
             name=root.name,
             path=str(root),
             target=candidate.target,
-            kind="dot" if led_count == 2 else "pro",
+            kind=kind,
             led_count=led_count,
         ))
-    return rows
+    return rows, refused
 
 
 def change_settings(change: Any) -> None:
@@ -591,21 +587,28 @@ def hooks_event(home: Path | None = None) -> dict[str, Any]:
 
 
 def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str]:
-    """`agent-monitor install|uninstall <provider>` in the SidePulse venv (D4: hooks go through the CLI).
+    """`sidepulse setup <provider>` (install) or `setup <provider> --uninstall` in the SidePulse venv
+    (D4: hooks go through the CLI). Upstream's install also installs and starts its service, which the
+    hooks report to.
 
     Run with UPSTREAM_CLI_UMASK: upstream creates its files with the process umask, a backup copy of
-    an agent config (which may hold API keys) and the hook-log folder among them.
+    an agent config (which may hold API keys) and the hook-log folder among them. Run in the home
+    folder: upstream's Codex trust step starts `codex app-server` in the working directory.
 
     Installing or removing a hook edits the user's agent config, so this runs
     only where the caller means it; tests run it under a scratch HOME.
     """
+    argv = [python, "-I", "-m", "sidepulse", "setup", provider]
+    if action == "uninstall":
+        argv.append("--uninstall")
     result = subprocess.run(
-        [python, "-I", "-m", "sidepulse", "agent-monitor", action, provider],
+        argv,
         capture_output=True,
         text=True,
         timeout=HOOK_COMMAND_TIMEOUT_SECONDS,
         check=False,
         umask=UPSTREAM_CLI_UMASK,
+        cwd=Path.home(),
     )
     output = (result.stdout + result.stderr).strip()
     return result.returncode == 0, output or f"exit {result.returncode}"
@@ -690,19 +693,18 @@ def config_backups(row: dict[str, Any]) -> list[tuple[Path, bool]]:
     return found
 
 
-def relay_socket_problems(folders: tuple[Path, ...]) -> list[str]:
-    """Upstream's relay socket leaves the state folder for a fixed name in /tmp when the folder's path is
-    long (relay.py relay_socket_path_for_state_dir): another account could take that name and receive the
-    hook events. Only upstream can move it; the helper names it. Skipped when upstream has no such rule."""
-    try:
-        from sidepulse.relay import relay_socket_path_for_state_dir
-    except ImportError:
-        return []
+def status_socket_problems(folders: tuple[Path, ...]) -> list[str]:
+    """Upstream's status socket, which every hook sends its report to, leaves the state folder for a fixed
+    name under /tmp when the folder's path is long (program_transport.status_socket_path): another
+    account could take that name first and receive the hook reports, which the hooks send without
+    checking who listens. Only upstream can move it; the helper names it."""
+    from sidepulse.program_transport import status_socket_path
+
     problems = []
     for folder in folders:
-        socket = relay_socket_path_for_state_dir(folder)
+        socket = status_socket_path(folder)
         if folder not in socket.parents:
-            problems.append(f"SidePulse's hook relay socket for {folder} is {socket}, a name in a shared folder "
+            problems.append(f"SidePulse's status socket for {folder} is {socket}, a name in a shared folder "
                             "another account could take; a shorter XDG_STATE_HOME keeps it in the state folder")
     return problems
 
@@ -737,7 +739,7 @@ def keep_hook_logs_private(home: Path | None = None) -> list[str]:
     if installed:
         problems += [problem for folder in folders if (problem := create_private(folder, folder=True))]
         problems += [problem for log in outside if (problem := create_private(log, folder=False))]
-        problems += relay_socket_problems(folders)
+        problems += status_socket_problems(folders)
     problems += [problem for folder in folders if (problem := make_private(folder, folder=True))]
     problems += [problem for log in outside if (problem := make_private(log, folder=False))]
     problems += [problem for path, folder in backups if (problem := make_private(path, folder=folder))]
@@ -816,11 +818,13 @@ def plain_notify_argv(summary: str) -> list[str]:
     return ["notify-send", "--app-name=SidePulse", summary]
 
 
-def display_of(displays: dict[str, str], device_id: str, battery_offered: bool = True) -> str:
+def display_of(displays: dict[str, str], device_id: str, battery_offered: bool = True, *,
+               alias: str | None = None) -> str:
     """The widget's remembered Display for a device: Agent when none is
     remembered, when the value is not one this helper offers, or when it is
-    Battery and there is no battery (D9)."""
-    display = displays.get(device_id, DEFAULT_DISPLAY)
+    Battery and there is no battery (D9). `alias` is the key an earlier upstream used (the mount root),
+    read when nothing is remembered under the id."""
+    display = displays.get(device_id, displays.get(alias, DEFAULT_DISPLAY) if alias else DEFAULT_DISPLAY)
     if display not in DISPLAYS or (display == "battery" and not battery_offered):
         return DEFAULT_DISPLAY
     return display
@@ -980,43 +984,6 @@ def set_device_brightness(device: Device, percent: float) -> None:
     value = normalize_brightness(percent * 255 / 100)
     change_settings(
         lambda s: s.with_device_brightness(device.id, value, name=device.name, path=device.path))
-
-
-class DirWatch:
-    """inotify on a directory, for MOVED_TO latest.json (the service's tmp + rename)."""
-
-    def __init__(self, directory: Path) -> None:
-        self.directory = directory
-        self.fd: int | None = None
-
-    def open(self) -> None:
-        if self.fd is not None or not self.directory.is_dir():
-            return
-        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
-        fd = libc.inotify_init1(IN_NONBLOCK | IN_CLOEXEC)
-        if fd < 0:
-            raise OSError(ctypes.get_errno(), "inotify_init1 failed")
-        mask = IN_MOVED_TO | IN_CLOSE_WRITE | IN_CREATE
-        if libc.inotify_add_watch(fd, os.fsencode(str(self.directory)), mask) < 0:
-            error = ctypes.get_errno()
-            os.close(fd)
-            raise OSError(error, f"inotify_add_watch failed for {self.directory}")
-        self.fd = fd
-
-    def names(self) -> list[str]:
-        if self.fd is None:
-            return []
-        try:
-            data = os.read(self.fd, 65536)
-        except BlockingIOError:
-            return []
-        names = []
-        offset = 0
-        while offset + 16 <= len(data):
-            _wd, _mask, _cookie, length = struct.unpack_from("iIII", data, offset)
-            names.append(data[offset + 16 : offset + 16 + length].rstrip(b"\0").decode(errors="replace"))
-            offset += 16 + length
-        return names
 
 
 # --- Bar LEDs and device frames (D6, D7, D21) ---------------------------------
@@ -1732,42 +1699,19 @@ def sessions_event(statuses: list[Any]) -> dict[str, Any]:
 
 # --- Keep awake (D11) ---
 
+# Upstream's sleep and lid rules (daemon_runtime.py since 20ca7fd, importable on Linux; before that they
+# lived in status_bar.py, which needs PyObjC, and were copied here).
+
 def awake_policy_should_hold(policy: str, *, agents_active: bool) -> bool:
-    # Copied from upstream status_bar.py (PyObjC, not importable here); tests/test_keep_awake.py compares the AST.
-    if policy == SLEEP_PREVENTION_ALWAYS:
-        return True
-    if policy == SLEEP_PREVENTION_AGENTS:
-        return agents_active
-    return False
+    from sidepulse.daemon_runtime import awake_policy_should_hold as upstream
+
+    return upstream(policy, agents_active=agents_active)
 
 
-def sleep_prevention_battery_safeguard(
-    snapshot: BatterySnapshot | None,
-    threshold_percent: float,
-) -> tuple[bool, str]:
-    # Copied from upstream status_bar.py; tests/test_keep_awake.py compares the AST.
-    threshold = max(0.0, min(100.0, float(threshold_percent)))
-    threshold_text = format_percent_value(threshold)
-    if threshold <= 0:
-        return False, "disabled"
-    if snapshot is None:
-        return False, f"battery unknown, threshold {threshold_text}"
-    if not snapshot.battery_present:
-        return False, f"no battery, threshold {threshold_text}"
-    battery_text = format_percent_value(snapshot.percent)
-    if snapshot.is_plugged:
-        return False, f"battery {battery_text}, plugged in, threshold {threshold_text}"
-    if snapshot.percent < threshold:
-        return True, f"battery {battery_text}, threshold {threshold_text}"
-    return False, f"battery {battery_text}, threshold {threshold_text}"
+def sleep_prevention_battery_safeguard(snapshot: Any, threshold_percent: float) -> tuple[bool, str]:
+    from sidepulse.daemon_runtime import sleep_prevention_battery_safeguard as upstream
 
-
-def format_percent_value(value: float | int) -> str:
-    # Copied from upstream status_bar.py; tests/test_keep_awake.py compares the AST.
-    number = float(value)
-    if number.is_integer():
-        return f"{int(number)}%"
-    return f"{number:.1f}%"
+    return upstream(snapshot, threshold_percent)
 
 
 def _sysfs(path: Path) -> str:
@@ -1833,34 +1777,16 @@ def read_lid_closed(run: Callable[..., subprocess.CompletedProcess] = subprocess
     raise ValueError(f"busctl answered {answer!r} for LidClosed")
 
 
-# Copied from upstream status_bar.py (PyObjC, not importable here); tests/test_power.py compares the AST.
-def lid_closed_led_state_should_hold(
-    *,
-    lid_closed: bool | None,
-    sleep_prevention_policy: str,
-    agents_active: bool | None,
-    battery_safeguard_active: bool = False,
-) -> bool:
-    if lid_closed is not True or agents_active is None:
-        return False
-    sleep_prevention_requested = awake_policy_should_hold(
-        sleep_prevention_policy,
-        agents_active=agents_active,
-    ) and not battery_safeguard_active
-    return not sleep_prevention_requested
+def lid_closed_led_state_should_hold(**rule: Any) -> bool:
+    from sidepulse.daemon_runtime import lid_closed_led_state_should_hold as upstream
+
+    return upstream(**rule)
 
 
-# Copied from upstream status_bar.py; tests/test_power.py compares the AST.
-def lid_close_animation_should_run(
-    *,
-    sleep_prevention_policy: str,
-    agents_active: bool | None,
-) -> bool:
-    if sleep_prevention_policy == SLEEP_PREVENTION_ALWAYS:
-        return False
-    if sleep_prevention_policy == SLEEP_PREVENTION_AGENTS:
-        return agents_active is False
-    return True
+def lid_close_animation_should_run(**rule: Any) -> bool:
+    from sidepulse.daemon_runtime import lid_close_animation_should_run as upstream
+
+    return upstream(**rule)
 
 
 def agents_awake(controller: Any, mode: Any, now: float) -> tuple[bool, str]:
@@ -1999,13 +1925,11 @@ class Helper:
     def __init__(self, out: TextIO) -> None:
         self.out = out
         self.capabilities: dict[str, dict[str, Any]] = {}
-        self.latest_path: Path | None = None
-        self.watch: DirWatch | None = None
         self.last_state: dict[str, Any] | None = None
         self.last_setup: dict[str, Any] | None = None
         self.last_devices: dict[str, Any] | None = None
         self.last_sessions: dict[str, Any] | None = None
-        # The statuses the popup lists, from the last good read of latest.json (D19 rule: none while unreadable).
+        # The statuses the popup lists, from the last good read of the service (D19 rule: none while unreadable).
         self.session_statuses: list[Any] = []
         self.devices: list[Device] = []
         self.device_count: int | None = None
@@ -2103,14 +2027,9 @@ class Helper:
                 self.error(feature, cap["reason"])
         # Hooks enabled with an earlier plugin or upstream's CLI left their logs as umask made them (#58).
         self.keep_hook_logs_private()
-        if self.capabilities["state"]["ok"]:
-            from sidepulse.ipc import default_latest_state_path
-
-            self.latest_path = default_latest_state_path()
-            self.watch = DirWatch(self.latest_path.parent)
 
     def refresh_state(self, force: bool = False) -> None:
-        if self.latest_path is None:
+        if not self.capabilities.get("state", {}).get("ok"):
             return
         from sidepulse.settings import load_settings
 
@@ -2120,13 +2039,9 @@ class Helper:
         self.settings = settings
         self.bar_leds_on = settings.virtual_status_device_enabled
         try:
-            snapshot = read_snapshot(
-                self.latest_path,
-                now=datetime.now(timezone.utc),
-                idle_timeout_seconds=settings.idle_timeout_seconds,
-            )
+            snapshot = read_snapshot()
         except (OSError, ValueError) as exc:
-            message = f"cannot read {self.latest_path}: {exc}"
+            message = str(exc)
             self.report("state", message)
             event = unavailable_state_event(message)
             # Upstream's refresh error path holds sleep as if an agent had errored (status_bar.py refresh_).
@@ -2223,23 +2138,19 @@ class Helper:
             return
         unsafe = False
         try:
-            found = discover_device_rows()
+            found, refused = discover_device_rows()
         except OSError as exc:
             self.report("devices", f"cannot look for SidePulse devices: {exc}")
             self.devices = []
             self.device_count = None
         else:
             # A device whose LED file is not a plain, short file is left alone and named in the popup (#55).
-            self.devices = []
-            for device in found:
-                problem = led_file_problem(device.target)
-                if problem is None:
-                    self.devices.append(device)
-                else:
-                    unsafe = True
-                    # SidePulse's service discovers and writes devices on its own, without these checks
-                    # (service.py), so the helper's refusal cannot protect the volume by itself (#62).
-                    self.report("devices", f"{device.name}: {problem}. {SERVICE_WRITES_UNCHECKED}")
+            self.devices = found
+            for name, problem in refused:
+                unsafe = True
+                # SidePulse's service discovers and writes devices on its own, without these checks
+                # (service.py), so the helper's refusal cannot protect the volume by itself (#62).
+                self.report("devices", f"{name}: {problem}. {SERVICE_WRITES_UNCHECKED}")
             from sidepulse.device_writer import DeviceWriteError
             from sidepulse.settings import load_settings
 
@@ -2250,7 +2161,7 @@ class Helper:
             settings = load_settings()
             now = self.clock()
             for device in pending:
-                display = display_of(self.displays, device.id, self.battery_offered)
+                display = display_of(self.displays, device.id, self.battery_offered, alias=device.path)
                 try:
                     apply_display(device, display, self.takeover_text(device, display, settings, now))
                 except (OSError, ValueError, DeviceWriteError) as exc:
@@ -2297,7 +2208,7 @@ class Helper:
                 "product": device.product,
                 "kind": device.kind,
                 "led_count": device.led_count,
-                "display": display_of(self.displays or {}, device.id, self.battery_offered),
+                "display": display_of(self.displays or {}, device.id, self.battery_offered, alias=device.path),
                 "percent": round(settings.brightness_for_device(device.id) * 100 / 255),
                 "colour": self.read_colour(device),
             })
@@ -2451,7 +2362,7 @@ class Helper:
         from sidepulse.device_writer import DeviceWriteError
 
         for device in self.devices:
-            if display_of(self.displays, device.id, self.battery_offered) == "off":
+            if display_of(self.displays, device.id, self.battery_offered, alias=device.path) == "off":
                 continue
             try:
                 apply_display(device, "agent")
@@ -2498,7 +2409,7 @@ class Helper:
         # icon (D12), which is always on show: its device steps even with the popup closed, while it
         # shows Agent. Each device steps once per frame, whoever reads it.
         icon = icon_device(self.devices)
-        if icon is not None and display_of(self.displays or {}, icon.id, self.battery_offered) == "off":
+        if icon is not None and display_of(self.displays or {}, icon.id, self.battery_offered, alias=icon.path) == "off":
             icon = None
         icon_leds: list[list[int]] | None = None
         for device in self.devices:
@@ -2903,16 +2814,6 @@ class Helper:
         self.next_frame = now + self.frame_interval
         while True:
             fds = [stdin_fd]
-            if self.watch is not None:
-                try:
-                    self.watch.open()
-                except OSError as exc:
-                    # Ticks still re-read the file every second, so only latency is lost.
-                    self.report("watch", f"inotify unavailable, polling every second: {exc}")
-                    self.watch = None
-                else:
-                    if self.watch.fd is not None:
-                        fds.append(self.watch.fd)
             fds.extend(proc.stdout.fileno() for _, proc, _ in self.notifications)
             deadlines = [self.next_tick, self.next_frame]
             if self.next_handover is not None:
@@ -2929,8 +2830,6 @@ class Helper:
                     if line.strip():
                         self.handle_line(line)
             self.pump_notifications()
-            if self.watch is not None and self.watch.fd in ready and "latest.json" in self.watch.names():
-                self.refresh_state()
             now = self.clock()
             if self.next_handover is not None and now >= self.next_handover:
                 # A battery preview or lid animation ends: its device hands back now, not at the next tick.

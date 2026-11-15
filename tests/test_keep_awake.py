@@ -102,11 +102,16 @@ def test_policy_values_are_upstream_settings_values():
     assert helper.SLEEP_PREVENTION_ALWAYS == upstream_settings.SLEEP_PREVENTION_ALWAYS == "always"
 
 
-@pytest.mark.parametrize("name", ["awake_policy_should_hold", "sleep_prevention_battery_safeguard", "format_percent_value"])
-def test_copied_upstream_functions_are_unchanged(name):
-    upstream = function_ast(upstream_status_bar(), name, drop_docstring=True)
-    ours = function_ast(Path(helper.__file__), name, drop_docstring=True)
-    assert ours == upstream, f"{name} drifted from upstream status_bar.py"
+@pytest.mark.parametrize("name", ["awake_policy_should_hold", "sleep_prevention_battery_safeguard"])
+def test_the_sleep_rules_are_upstreams_own(name, monkeypatch):
+    # Since 20ca7fd upstream keeps them in daemon_runtime.py, importable on Linux: the helper calls them.
+    import sidepulse.daemon_runtime as runtime
+
+    calls = []
+    monkeypatch.setattr(runtime, name, lambda *a, **k: calls.append((a, k)) or "upstream")
+    args = (("agents",), {"agents_active": True}) if name == "awake_policy_should_hold" else ((None, 20.0), {})
+    assert getattr(helper, name)(*args[0], **args[1]) == "upstream"
+    assert calls == [args]
 
 
 # --- The predicate: grace and transitions (upstream's should_hold_for_mode) ---
@@ -317,10 +322,11 @@ def test_the_helper_probes_keep_awake_ok_with_the_fake_on_path():
 # --- The helper: events, grace over time, battery and policy changes ---
 
 @pytest.fixture
-def clocked(tmp_path, monkeypatch):
+def clocked(tmp_path, monkeypatch, service):
     """A started helper with its own settings, no battery and a clock the test moves."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    service()
     out = io.StringIO()
     h = helper.Helper(out)
     h.hello()
@@ -446,11 +452,13 @@ def test_the_helper_releases_the_lock_when_it_exits(clocked, fake_systemd_inhibi
 
 # --- Through the real loop, as the widget runs it ---
 
-def test_the_widget_sees_the_lock_held_and_released_with_the_helper(tmp_path, monkeypatch, fake_systemd_inhibit):
+def test_the_widget_sees_the_lock_held_and_released_with_the_helper(tmp_path, monkeypatch, fake_systemd_inhibit,
+                                                                      request):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     proc = ProtocolHelper(tmp_path)
+    request.addfinalizer(proc.stop_daemon)
     proc.read_event()  # hello
-    proc.write_latest([status_row("working")])
+    proc.set_statuses([status_row("working")])
     proc.send({"cmd": "set-policy", "policy": "agents"})
     awake = proc.event_matching(lambda e: e["type"] == "awake" and e["holding"] is True)
     assert awake["reason"] == "agents are working"

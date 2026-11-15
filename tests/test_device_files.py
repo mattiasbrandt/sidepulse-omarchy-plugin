@@ -93,7 +93,7 @@ def test_a_plain_led_file_still_works(world):
 
 def test_shown_program_refuses_a_link_swapped_in_after_discovery(world, tmp_path):
     world.led.write_text("brightness 128\n")
-    device = helper.discover_device_rows()[0]
+    device = helper.discover_device_rows()[0][0]
     world.led.unlink()
     (tmp_path / "elsewhere").write_text("secret\n")
     world.led.symlink_to(tmp_path / "elsewhere")

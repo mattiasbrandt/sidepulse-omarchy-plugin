@@ -10,13 +10,13 @@ here.
 
 ## Code from SidePulse
 
-Taken from upstream commit
-[`6d55225`](https://github.com/inteliwear/sidepulse/commit/6d55225fed20a82521b23d86a4df2c4a15dff295).
+Checked against upstream commit
+[`20ca7fd`](https://github.com/inteliwear/sidepulse/commit/20ca7fdd6645ba070af607e24587084b6f809275).
 Paths under `src/sidepulse/` are upstream's.
 
 | File here | Code here | Upstream source | Relation |
 |---|---|---|---|
-| `helper/sidepulse_omarchy.py` | `awake_policy_should_hold`, `sleep_prevention_battery_safeguard`, `format_percent_value`, `lid_closed_led_state_should_hold`, `lid_close_animation_should_run`, `menu_status_sort_key` | `src/sidepulse/status_bar.py` | copied |
+| `helper/sidepulse_omarchy.py` | `menu_status_sort_key` | `src/sidepulse/status_bar.py` | copied |
 | `helper/sidepulse_omarchy.py` | `recent_statuses` | `src/sidepulse/status_bar.py` | adapted |
 | `helper/sidepulse_omarchy.py` | `MODE_STATES`, `STATE_LABELS`, `STATE_COLOURS` | `src/sidepulse/status_bar.py` | copied mapping and values |
 | `helper/sidepulse_omarchy.py` | `_engine_input` | `writeInput` in `src/sidepulse/led_wasm.py` | ported to Python |

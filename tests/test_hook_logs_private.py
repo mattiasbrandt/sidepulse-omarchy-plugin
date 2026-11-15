@@ -27,9 +27,9 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     (tmp_path / "home").mkdir()
-    # pytest's scratch paths are long enough to send upstream's relay socket to /tmp; that check has its
+    # pytest's scratch paths are long enough to send upstream's status socket to /tmp; that check has its
     # own tests below.
-    monkeypatch.setattr(helper, "relay_socket_problems", lambda folders: [])
+    monkeypatch.setattr(helper, "status_socket_problems", lambda folders: [])
     return tmp_path
 
 
@@ -238,14 +238,14 @@ def test_a_problem_is_shown_once_and_cleared_when_it_is_gone(home, monkeypatch):
     assert mode(state_dir(home)) == 0o700
 
 
-def test_a_relay_socket_sent_to_tmp_is_named():
+def test_a_status_socket_sent_to_tmp_is_named():
     long = Path("/home") / ("u" * 60) / ".local" / "state" / "sidepulse" / "agent-monitor"
-    [problem] = helper.relay_socket_problems((long,))
+    [problem] = helper.status_socket_problems((long,))
     assert "/tmp/" in problem and "another account" in problem
 
 
-def test_a_relay_socket_in_the_state_folder_is_fine():
-    assert helper.relay_socket_problems((Path("/home/u/.local/state/sidepulse/agent-monitor"),)) == []
+def test_a_status_socket_in_the_state_folder_is_fine():
+    assert helper.status_socket_problems((Path("/home/u/.local/state/sidepulse/agent-monitor"),)) == []
 
 
 def test_upstreams_cli_runs_with_a_private_umask(home):

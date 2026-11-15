@@ -62,7 +62,7 @@ def upstream_entry(home: Path, device_id: str) -> dict:
 
 
 def device_by_name(name: str) -> helper.Device:
-    for device in helper.discover_device_rows():
+    for device in helper.discover_device_rows()[0]:
         if device.name == name:
             return device
     raise AssertionError(f"no device named {name}")
@@ -340,3 +340,31 @@ def test_unknown_display_is_refused_as_an_error(helper_proc):
     event = helper_proc.event_matching(lambda e: e["type"] == "error")
     assert event["feature"] == "command"
     assert "sparkles" in event["message"]
+
+
+def test_a_device_is_keyed_as_upstreams_service_keys_it(home, mounts):
+    # 20ca7fd's service keys a device's settings by the serial its STATUS.TXT gives (device_id), not the
+    # mount path: the helper's Off and Battery must land under the same key or the service ignores them.
+    (mounts / "PulseDot" / "STATUS.TXT").write_text("app_version 1.2.0\nserial SPD-424242\n")
+    device = device_by_name("PulseDot")
+    assert device.id == "sidepulse:SPD-424242"
+    assert (device.kind, device.led_count) == ("dot", 2)
+    assert device.path == str(mounts / "PulseDot")
+    helper.apply_display(device, "off")
+    assert load_settings().display_for_device("sidepulse:SPD-424242") == "custom"
+
+
+def test_a_display_remembered_under_the_mount_path_still_applies():
+    # The widget remembered Displays by mount path before 20ca7fd; they are read until it saves the new id.
+    displays = {"/run/media/u/PulseDot": "off"}
+    assert helper.display_of(displays, "sidepulse:SPD-1", alias="/run/media/u/PulseDot") == "off"
+    assert helper.display_of({**displays, "sidepulse:SPD-1": "agent"}, "sidepulse:SPD-1",
+                             alias="/run/media/u/PulseDot") == "agent"
+
+
+def test_a_volume_named_like_no_device_with_a_status_file_is_upstreams_pro(home, mounts):
+    # Upstream takes any volume holding a STATUS.TXT as a device (discover_mounted_devices); its product
+    # rule then names it a Pro. The helper takes upstream's word and does not guess better.
+    (mounts / "OtherStick").mkdir()
+    (mounts / "OtherStick" / "STATUS.TXT").write_text("hello\n")
+    assert device_by_name("OtherStick").product == "SidePulse Pro"

@@ -1,4 +1,4 @@
-"""Fields read from files other processes write stay in their lane (audit for #62).
+"""Fields read from files other processes write stay in their lane.
 
 latest.json and the session records are written from hook payloads, and /proc lists every account's
 processes: a provider name never reaches a command line, a session id never becomes a path, and

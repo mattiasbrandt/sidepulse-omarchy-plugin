@@ -94,16 +94,16 @@ SETUP_EVERY_TICKS = 5
 # The most the helper reads of a file it parses whole (agent configs, session records, settings).
 OWN_FILE_LIMIT = 16 * 1024 * 1024
 TRANSCRIPT_LINE_LIMIT = 1024 * 1024
-# Deadlines for calls that can block on a mount or a command (#66). Discovery stats every mount root
+# Deadlines for calls that can block on a mount or a command. Discovery stats every mount root
 # entry, /mnt's automounts included; the service check runs systemctl with no timeout of its own.
 DISCOVERY_SECONDS = 3.0
 SERVICE_CHECK_SECONDS = 3.0
 FOLDER_CHECK_SECONDS = 2.0
 # The service answers get_state in milliseconds; upstream's client waits 0.5 s per receive and tries up to
-# two sockets, so a service that hangs would hold the loop each tick without this (#70).
+# two sockets, so a service that hangs would hold the loop each tick without this.
 STATE_READ_SECONDS = 0.25
 
-# The umask upstream's CLI runs with when the plugin starts it (#62): every file it creates (agent config
+# The umask upstream's CLI runs with when the plugin starts it: every file it creates (agent config
 # backups, the hook-log folder and logs, the service unit) is the user's alone. A config it rewrites in
 # place keeps its own mode.
 UPSTREAM_CLI_UMASK = 0o077
@@ -130,7 +130,7 @@ HOOK_COMMAND_TIMEOUT_SECONDS = 60.0
 # only this one, and only while the sender is alive (D20).
 NOTIFY_ACTION = "default"
 # The Ask notice's body. Fixed: notify-send's arguments are readable by every local account
-# (/proc/<pid>/cmdline) while the notice waits, so nothing from the session goes there (#55).
+# (/proc/<pid>/cmdline) while the notice waits, so nothing from the session goes there.
 NOTIFY_BODY = "A session is waiting for you. Open it from here or from the SidePulse popup."
 # Upstream's agent names as the popup writes them (GLOSSARY: Agent).
 PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "junie": "Junie"}
@@ -334,7 +334,7 @@ DAEMON_UNAVAILABLE = "the SidePulse service is not running; Start service starts
 
 
 def state_source_problem() -> str | None:
-    """Why the service's answer cannot be trusted now, or None (#66). The helper asks the service over
+    """Why the service's answer cannot be trusted now, or None. The helper asks the service over
     its status socket; another account that controls the socket's folder could answer in its place,
     with sessions and folders of its choosing that a click would then resume. The folder must pass
     trusted_folder_problem, and the socket, when present, must be the user's own socket."""
@@ -380,7 +380,7 @@ def read_snapshot() -> Any:
         raise ValueError(f"the SidePulse service sent no snapshot: {exc!r}") from exc
     # Upstream builds each status from the reply's fields as they come (row.get), and the helper's lists and
     # events read them as text: a field missing or of another type from a newer service must make the State
-    # unavailable with a reason, not end the helper (#70, D14).
+    # unavailable with a reason, not end the helper (D14).
     statuses = [*snapshot.statuses, *snapshot.stale_statuses, snapshot.aggregate.representative]
     for status in statuses:
         if status is None:
@@ -554,7 +554,7 @@ def change_settings(change: Any) -> None:
 
     The service writes the same file in place, and upstream's load_settings
     falls back to the defaults on a file it cannot parse, so a read that met a
-    half-written file could save the defaults over the user's settings (#55).
+    half-written file could save the defaults over the user's settings.
     The text is read once, checked, and handed to upstream as a private copy
     beside it; upstream saves into that copy, which then replaces the file in
     one rename, keeping the file's mode without group and other access. A settings.json that is a link (a
@@ -579,7 +579,7 @@ def change_settings(change: Any) -> None:
         save_settings(change(current), staged)
         if text is not None:
             # The file's own mode, without group and other access: it names the devices and their
-            # mount paths (#70). mkstemp already made the staged copy 600.
+            # mount paths. mkstemp already made the staged copy 600.
             os.chmod(staged, stat.S_IMODE(os.stat(path).st_mode) & 0o700)
         os.replace(staged, path)
     except BaseException:
@@ -645,7 +645,7 @@ def hooks_event(home: Path | None = None) -> dict[str, Any]:
 
 
 def hook_install_problems(provider: str, home: Path | None = None) -> list[str]:
-    """Why turning this agent's hooks on would let another account read or redirect what they write (#66).
+    """Why turning this agent's hooks on would let another account read or redirect what they write.
 
     Checked before upstream's installer runs, so nothing is installed into a place that fails: each state
     folder upstream's hooks may write to, the entries already in it, the agent's config folder (upstream
@@ -662,7 +662,7 @@ def hook_install_problems(provider: str, home: Path | None = None) -> list[str]:
     if row.get("config_path"):
         config = Path(row["config_path"])
         target = Path(os.path.realpath(config))
-        # Upstream's installer reads, backs up and rewrites the config by name, following a link (#70).
+        # Upstream's installer reads, backs up and rewrites the config by name, following a link.
         for folder in dict.fromkeys([config.parent, target.parent]):
             if problem := trusted_folder_problem(folder):
                 problems.append(f"{provider}'s config folder: {problem}")
@@ -722,7 +722,7 @@ def run_hook_command(action: str, provider: str, python: str) -> tuple[bool, str
 
 class Deadline:
     """Runs a call that can block on something outside the helper (an automount or NFS mount that hangs,
-    a systemctl that does not answer) on a worker thread, waiting at most `seconds` (#66).
+    a systemctl that does not answer) on a worker thread, waiting at most `seconds`.
 
     The helper's loop is serial: one blocked call would stop its frames, commands and the sleep lock's
     release. A call past its deadline raises TimeoutError and keeps running on its thread, and the next
@@ -757,7 +757,7 @@ class Deadline:
 
 
 def trusted_folder_problem(folder: str | Path) -> str | None:
-    """Why another local account could change what `folder` holds, or None (#66).
+    """Why another local account could change what `folder` holds, or None.
 
     Every folder on the real path, from / down, must be the user's or root's, and no other account may
     write to it: one that can could rename the next folder away and put its own in its place, holding a
@@ -794,7 +794,7 @@ def trusted_folder_problem(folder: str | Path) -> str | None:
 
 
 def open_own(path: str | Path, limit: int | None = OWN_FILE_LIMIT) -> Any:
-    """Open, for reading in binary, a file the helper reads for itself (#66).
+    """Open, for reading in binary, a file the helper reads for itself.
 
     Opened without blocking, so a FIFO put in its place never stalls the helper's loop; then it must be
     a regular file the user owns, of at most `limit` bytes. A link is followed (agent configs are often
@@ -823,14 +823,14 @@ def read_own(path: str | Path, limit: int = OWN_FILE_LIMIT) -> str:
 
 
 def settings_problem() -> str | None:
-    """Why upstream's settings.json must not be read or saved now, or None (#66). Its real folder must
+    """Why upstream's settings.json must not be read or saved now, or None. Its real folder must
     pass trusted_folder_problem, and the file, when present, must be the user's own regular file: a FIFO
     would block upstream's plain read, and a save through a folder another account controls would
     replace whatever file that account chose."""
     from sidepulse.settings import default_settings_path
 
     # Upstream opens the path by name, so both the folder holding it and, when it is a link, the folder
-    # holding what it names must be trusted (#70); its custom animations sit in `animations/` beside it.
+    # holding what it names must be trusted; its custom animations sit in `animations/` beside it.
     named = Path(default_settings_path())
     path = Path(os.path.realpath(named))
     for folder in dict.fromkeys([named.parent, named.parent / "animations", path.parent]):
@@ -862,7 +862,7 @@ def load_own_settings() -> Any:
 
 
 def state_entry_problems(folder: Path) -> list[str]:
-    """Entries in a state folder that SidePulse's hooks would write through or another account owns (#66).
+    """Entries in a state folder that SidePulse's hooks would write through or another account owns.
 
     Making the folder 700 does not undo a link planted while it was open: upstream's hooks append to
     their logs by name and follow it. The service's own socket is the one non-file entry it keeps."""
@@ -986,7 +986,7 @@ def status_socket_problems(folders: tuple[Path, ...]) -> list[str]:
 
 
 def keep_hook_logs_private(home: Path | None = None) -> list[str]:
-    """Close SidePulse's hook logs and config backups to other accounts (#58, #62); the problems found.
+    """Close SidePulse's hook logs and config backups to other accounts; the problems found.
 
     Upstream's hook installer and hook create the agent-monitor state folder and its logs with the
     process umask, and the logs hold the agents' complete prompts. A folder the user alone can enter
@@ -996,11 +996,11 @@ def keep_hook_logs_private(home: Path | None = None) -> list[str]:
     writes its audit log (event-status.jsonl, with prompt previews) there, wherever the agent's own log
     goes. A SidePulse hook log configured outside the state folders is created empty at 600 when missing,
     and loses group and other access when present; its folder is someone else's choice and is left alone,
-    but named when another account could change it (#66). Upstream's backups of agent configs lose group
+    but named when another account could change it. Upstream's backups of agent configs lose group
     and other access too, and so does upstream's device-lock folder.
 
     A private folder does not undo what was planted while it was open, so a state folder another account
-    can change, and an entry in it that is a link or someone else's, are named too (#66).
+    can change, and an entry in it that is a link or someone else's, are named too.
     """
     from sidepulse.providers import candidate_state_dirs
 
@@ -1046,7 +1046,7 @@ def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict
     source = path or default_status_audit_log_path()
     # Upstream reads the log by name with a plain open() and no size limit. Read it only in a folder no
     # other account can change and when it is the user's own regular file, so it cannot be a FIFO that
-    # blocks the helper or a file someone else filled (#66). Its size is the user's own hooks' doing.
+    # blocks the helper or a file someone else filled. Its size is the user's own hooks' doing.
     problem = trusted_folder_problem(source.parent)
     if problem is not None:
         raise OSError(errno.EPERM, f"not reading {source}: {problem}")
@@ -1084,7 +1084,7 @@ def hook_log_event(limit: int = HOOK_LOG_ROWS, path: Path | None = None) -> dict
 def _local_clock(stamp: str) -> str:
     try:
         return datetime.fromisoformat(stamp).astimezone().strftime("%H:%M:%S")
-    except (ValueError, OverflowError):  # year 1 or 9999 overflows the local clock (#70)
+    except (ValueError, OverflowError):  # year 1 or 9999 overflows the local clock
         return stamp
 
 
@@ -1103,7 +1103,7 @@ def notification_text(status: Any) -> tuple[str, str]:
     """The summary and body of the notice for a session that asks: the agent's name only.
 
     The project and the agent's question stay out: they would sit in notify-send's
-    command line, which any local account can read while the notice waits (#55).
+    command line, which any local account can read while the notice waits.
     """
     name = PROVIDER_NAMES.get(str(status.provider).lower(), "An agent")  # never a name from the file
     return f"{name} needs attention", NOTIFY_BODY
@@ -1179,13 +1179,13 @@ def led_file_problem(target: str | Path) -> str | None:
     Any auto-mounted volume whose name looks like a SidePulse, or that holds an LED file, is a device to
     upstream's discovery, so the file can come from a stick someone else made: a symbolic link would turn
     the LED write into a write to its target (upstream's writer follows it), a FIFO would block the
-    helper's loop, and a huge file would be read every second (#55). A program never exceeds upstream's
+    helper's loop, and a huge file would be read every second. A program never exceeds upstream's
     MAX_LED_BYTES.
 
     The folder holding the file, and every folder above it, must be one no other account can change
     (trusted_folder_problem; the volume itself must be the user's own): upstream's writer opens the file
     again by name, so another local account able to write there, or to rename a folder on the way, could
-    swap in a link between this check and the write (#55, #66). A check that fails with an error names
+    swap in a link between this check and the write. A check that fails with an error names
     that error.
     """
     from sidepulse.device_writer import MAX_LED_BYTES
@@ -1216,7 +1216,7 @@ def led_file_problem(target: str | Path) -> str | None:
                     "leaving it alone")
     # When the LED file cannot be opened or created for writing (a read-only volume), upstream's writer falls
     # back to the device's read channel: it reads STATUS.TXT with a plain open() and maps setup.html
-    # (readonly_control.py). A link there would be followed and a FIFO would block the helper (#62).
+    # (readonly_control.py). A link there would be followed and a FIFO would block the helper.
     for name in DEVICE_CONTROL_FILES:
         try:
             other = os.lstat(path.parent / name)
@@ -1284,7 +1284,7 @@ def full_brightness_program(text: str | None, brightness: int) -> str | None:
 
 def adopt_device_key(device: Device) -> None:
     """Move a device's settings kept under its mount path to its id, before anything is written under the
-    id (#70). Upstream's service does the same move (daemon_runtime.migrate_device_settings), but only while
+    id. Upstream's service does the same move (daemon_runtime.migrate_device_settings), but only while
     it runs, and it keeps an entry already under the id: a Display or brightness the helper saved under the
     new id first would get upstream's default brightness, 255, and the saved one would be dropped."""
     from dataclasses import replace
@@ -1723,7 +1723,7 @@ def tmux_panes_holding(chain: list[int], run: Run) -> list[tuple[str, str]]:
     """(pane id, session id) of the tmux panes whose shell is the session's process or an ancestor.
 
     The session id ($N), not its name: the name is often the project's, and the attach command stays in
-    the terminal's command line, which any local account can read (#55)."""
+    the terminal's command line, which any local account can read."""
     done = run(["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{pane_id} #{session_id}"])
     if done.returncode != 0:
         if "no server running" in done.stderr:
@@ -1832,7 +1832,7 @@ Spawn = Callable[..., None]  # (argv, cwd, env=None): env adds variables to the 
 
 # The resume command travels in the environment, not in argv: a terminal keeps its command line for as long
 # as the window is open, and any local account can read that (/proc/<pid>/cmdline), while /proc/<pid>/environ
-# is the owner's alone (#55). The shell refuses to run when the variable did not arrive (a terminal that
+# is the owner's alone. The shell refuses to run when the variable did not arrive (a terminal that
 # drops the environment), keeps the message on screen until Enter, and keeps the variable from the agent.
 RESUME_ENV = "SIDEPULSE_RESUME"
 RESUME_SCRIPT = (
@@ -1873,7 +1873,7 @@ def spawn_detached(argv: list[str], cwd: str | None, env: dict[str, str] | None 
 
 
 def focus_window(address: str, title: str, run: Run) -> tuple[bool, str]:
-    """Raise a Hyprland window by address (spike #2: hyprctl exits 0 even when the address is gone)."""
+    """Raise a Hyprland window by address (hyprctl exits 0 even when the address is gone)."""
     if not HYPRLAND_ADDRESS.fullmatch(address):
         return False, f"Not focusing {title}: {address!r} is not a window address"
     done = run(["hyprctl", "dispatch", f'hl.dsp.focus({{ window = "address:{address}" }})'])
@@ -2072,8 +2072,8 @@ def read_battery(root: Path = POWER_SUPPLY_ROOT) -> Any:
         return BatterySnapshot(battery_present=False, is_plugged=plugged)
     battery = batteries[0]
     status = _sysfs(battery / "status")
-    # An online charger wins over a status that still says Discharging: some firmware (a ThinkPad in #9's
-    # laptop pass) turns status to Charging about 5 s after the adapter goes online. "Not charging" (a charge
+    # An online charger wins over a status that still says Discharging: some firmware (a ThinkPad,
+    # for one) turns status to Charging about 5 s after the adapter goes online. "Not charging" (a charge
     # limit) and "Full" keep their own look.
     charging = status == "Charging" or (plugged and status == "Discharging")
     full = status == "Full"
@@ -2258,7 +2258,7 @@ class Helper:
         # The statuses the popup lists, from the last good read of the service (D19 rule: none while unreadable).
         self.session_statuses: list[Any] = []
         self.devices: list[Device] = []
-        # Calls that can hang on something outside the helper, each with its deadline (#66).
+        # Calls that can hang on something outside the helper, each with its deadline.
         self.discovery = Deadline("device discovery", DISCOVERY_SECONDS)
         self.state_read = Deadline("reading the SidePulse service", STATE_READ_SECONDS)
         self.service_check = Deadline("the SidePulse service check", SERVICE_CHECK_SECONDS)
@@ -2356,7 +2356,7 @@ class Helper:
         for feature, cap in self.capabilities.items():
             if not cap["ok"]:
                 self.error(feature, cap["reason"])
-        # Hooks enabled with an earlier plugin or upstream's CLI left their logs as umask made them (#58).
+        # Hooks enabled with an earlier plugin or upstream's CLI left their logs as umask made them.
         self.keep_hook_logs_private()
 
     def refresh_state(self, force: bool = False) -> None:
@@ -2480,12 +2480,12 @@ class Helper:
             self.devices = []
             self.device_count = None
         else:
-            # A device whose LED file is not a plain, short file is left alone and named in the popup (#55).
+            # A device whose LED file is not a plain, short file is left alone and named in the popup.
             self.devices = found
             for name, problem in refused:
                 unsafe = True
                 # SidePulse's service discovers and writes devices on its own, without these checks
-                # (service.py), so the helper's refusal cannot protect the volume by itself (#62).
+                # (service.py), so the helper's refusal cannot protect the volume by itself.
                 self.report("devices", f"{name}: {problem}. {SERVICE_WRITES_UNCHECKED}")
             from sidepulse.device_writer import DeviceWriteError
 
@@ -2933,7 +2933,7 @@ class Helper:
             self.error("command", f"{action} needs a provider: one of {', '.join(HOOK_PROVIDERS)}")
             return
         if action == "install":
-            # Fail closed (#66): no hooks into a folder another account can change or read.
+            # Fail closed: no hooks into a folder another account can change or read.
             try:
                 problems = hook_install_problems(provider)
             except (OSError, ValueError) as exc:
@@ -2956,7 +2956,7 @@ class Helper:
                 problems = [f"cannot check where the hooks write: {exc}"]
             if problems:
                 # The installer's own files failed the privacy pass: take the hooks out again, so none
-                # stay active writing where another account can read (#66, marketplace review round 5).
+                # stay active writing where another account can read.
                 try:
                     removed, detail = run_hook_command("uninstall", provider, sys.executable)
                 except (OSError, subprocess.SubprocessError) as exc:
@@ -2975,7 +2975,7 @@ class Helper:
         self.refresh_log(force=True)
 
     def keep_hook_logs_private(self) -> list[str]:
-        """keep_hook_logs_private, its problems reported once on their own line until they clear (#58, #62);
+        """keep_hook_logs_private, its problems reported once on their own line until they clear;
         returns them."""
         if not self.capabilities.get("hooks", {}).get("ok"):
             return []
@@ -3117,7 +3117,7 @@ class Helper:
             ok, message = False, f"Could not open {status.display_name}: {exc}"
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
             # The lookup reads files and command output the helper does not control (session files,
-            # transcripts, hyprctl, herdr, tmux): a malformed one fails this click, not the helper (#55).
+            # transcripts, hyprctl, herdr, tmux): a malformed one fails this click, not the helper.
             ok, message = False, f"Could not open {status.display_name}: {type(exc).__name__}: {exc}"
         self.emit({"type": "result", "command": "open-session", "ok": ok, "action": plan["action"],
                    "message": message})

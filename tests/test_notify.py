@@ -61,7 +61,7 @@ def test_notification_text_names_only_the_agent():
 
 def test_the_notice_command_line_holds_nothing_from_the_session(monkeypatch):
     # Any local account can read a process's command line (/proc/<pid>/cmdline) while the notice waits,
-    # so the project and the agent's question must not reach notify-send's arguments (#55).
+    # so the project and the agent's question must not reach notify-send's arguments.
     started: list[list[str]] = []
     h = helper.Helper(io.StringIO())
     monkeypatch.setattr(h, "start_notice", lambda argv, key: started.append(argv))

@@ -9,13 +9,15 @@ Dot", "SidePulse Pro", "Bar LEDs"; lowercase `sidepulse` only in identifiers.
 
 ## Source of truth
 
-- **`docs/spec.md`** holds the decisions (D1–D16), the spec, the plan, and the
+- **`docs/spec.md`** holds the decisions (D1–D25), the spec, the plan, and the
   research appendix with file:line citations. Read the decisions that touch your
-  change before writing code. A change that alters a decision amends that
-  decision in `docs/spec.md` in the same PR.
+  change before writing code. A change that alters a decision rewrites that
+  decision in `docs/spec.md` in the same PR, so it describes the current state:
+  no "amended in" notes or other change history, which belongs in commits, PRs
+  and issues.
 - **Issues:** parent #1; each plan slice is a sub-issue with native blocked-by
-  edges. Work an issue only once its blockers are closed. Spike answers (#2)
-  land in `docs/spec.md` as amendments to the decision they settle.
+  edges. Work an issue only once its blockers are closed. A spike's answer goes
+  into the decision it settles.
 
 ## Standards
 

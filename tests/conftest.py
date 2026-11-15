@@ -6,7 +6,7 @@ command, so no test can take a real sleep lock (D11) and a test can check that
 the lock's child ended.
 
 Every test also gets a fake `systemctl` (see fake_systemctl) and starts with HOME and the XDG config and state dirs in a scratch
-folder: the helper changes files there when it starts (#58), and a test that
+folder: the helper changes files there when it starts, and a test that
 does not set its own must never reach the user's real ones.
 """
 

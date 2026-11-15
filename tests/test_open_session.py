@@ -78,7 +78,7 @@ def test_stopped_session_resumes_with_upstreams_command_in_a_terminal(provider, 
 
 
 def test_the_resume_command_line_holds_neither_the_project_nor_the_session():
-    # A terminal keeps its argv for the window's life and any local account can read it (#55).
+    # A terminal keeps its argv for the window's life and any local account can read it.
     spawn = FakeSpawn()
     helper.perform_open({"action": "resume"}, status(), FakeRun(), spawn)
     [(argv, _)] = spawn.started
@@ -237,7 +237,7 @@ def test_a_terminal_that_hands_off_and_exits_cleanly_is_success():
     helper.spawn_detached(["true"], None)
 
 
-# A malformed file or command output in the lookup fails the click, not the helper (#55).
+# A malformed file or command output in the lookup fails the click, not the helper.
 
 def test_a_lookup_that_meets_malformed_data_answers_with_a_failed_result(monkeypatch):
     import io

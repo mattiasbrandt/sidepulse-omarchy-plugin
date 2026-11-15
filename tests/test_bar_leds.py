@@ -346,7 +346,7 @@ def test_unreadable_state_shows_no_band(scratch):
 
 def test_an_upstream_without_the_bar_led_names_keeps_the_rest_of_the_helper_running(scratch, monkeypatch):
     """D14: a missing Bar LED name disables only the Bar LEDs. The State and keep-awake paths must not
-    import it, or the helper dies on the first tick (Codex review of #39)."""
+    import it, or the helper dies on the first tick."""
     import sidepulse.led_status
 
     monkeypatch.delattr(sidepulse.led_status, "display_state_for_mode")
@@ -392,7 +392,7 @@ def mount_dot(scratch: Path) -> Path:
 
 
 def test_no_device_frames_while_the_popup_is_closed(scratch):
-    """Device frames are for the popup's rows only (#8 review): none flow while it is closed."""
+    """Device frames are for the popup's rows only: none flow while it is closed."""
     mount_dot(scratch)
     write_latest(scratch, "working")
     write_settings(scratch, True)
@@ -463,7 +463,7 @@ def test_set_popup_needs_a_boolean(scratch):
 
 
 def test_devices_get_their_own_live_frames(scratch):
-    """The popup's device rows show the frames of the program the device holds (D21, #5 review)."""
+    """The popup's device rows show the frames of the program the device holds (D21)."""
     mount = scratch / "media" / "PulseDot"
     mount.mkdir(parents=True)
     (mount / "LEDS.LED").write_text("#00E5FF\nrepeat\n")

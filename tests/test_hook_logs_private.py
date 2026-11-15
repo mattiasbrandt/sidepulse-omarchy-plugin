@@ -1,4 +1,4 @@
-"""SidePulse's hook logs are closed to other accounts (#58, #62).
+"""SidePulse's hook logs are closed to other accounts.
 
 Upstream's hook installer and hook create the agent-monitor state folder and the agents' logs with the
 process umask, and the logs hold complete prompts. The helper takes group and other access off that
@@ -166,7 +166,7 @@ def claude_hook_command(home: Path) -> str:
 
 
 def test_a_missing_folder_is_created_private_when_hooks_are_installed(home):
-    # Hooks enabled earlier, the state folder gone before the helper starts (#62).
+    # Hooks enabled earlier, the state folder gone before the helper starts.
     install_claude_hooks()
     shutil.rmtree(state_dir(home))
     out = io.StringIO()

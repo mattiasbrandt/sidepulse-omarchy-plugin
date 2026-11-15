@@ -31,10 +31,9 @@ either changes or names the decision it departs from.
   Display the user set to Off is not one, and stays Off (D9).
 - **Shown state follows its source (D5, D14).** When a read fails or a process
   ends, the widget shows *unavailable* or nothing, never the last good value;
-  and a timer, when it fires, re-checks the condition that scheduled it. Both
-  slipped through #24: the bar kept Working after `latest.json` became
-  unreadable, and a crash-restart timer started the helper after the last
-  widget had gone (#26).
+  and a timer, when it fires, re-checks the condition that scheduled it: a bar
+  that keeps Working after its source stopped answering, or a crash-restart
+  timer that starts the helper after the last widget has gone, breaks this.
 
 ## Distribution
 
@@ -55,6 +54,11 @@ either changes or names the decision it departs from.
   _Avoid_. CI catches misspelled forms of "SidePulse"; a review catches the
   rest: lowercase `sidepulse` outside identifiers, "Notch" for our Bar LEDs,
   "provider" or "custom" leaking from upstream's code into the UI.
+- **Comments and docs describe the current code.** A comment says what a section
+  does and why, in its own words: no issue or PR numbers, which point elsewhere
+  instead of explaining. Docs, `docs/spec.md` included, state how things are now;
+  change history lives in commits, PRs and issues. Decision numbers (D9) and
+  upstream file names are fine: they name a current fact.
 
 ## Versioning
 

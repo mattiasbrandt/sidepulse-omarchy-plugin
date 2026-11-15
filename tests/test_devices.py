@@ -156,7 +156,7 @@ def test_settings_are_saved_through_one_rename_and_keep_their_mode_but_private(h
     [(source, destination)] = renames
     assert destination == path and source.parent == path.parent and source != path
     assert load_settings().brightness_for_device(device.id) == 50
-    assert oct(path.stat().st_mode & 0o777) == "0o600"  # the mode, without group and other access (#70)
+    assert oct(path.stat().st_mode & 0o777) == "0o600"  # the mode, without group and other access
     assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(".")) == []
 
 

@@ -1,4 +1,6 @@
-"""What the final pre-release audit and the Codex review of #67 found (#70), each against upstream's code."""
+"""Robustness and same-user edges: device keys moving to the serial id, a service that does not answer,
+out-of-range hook-log times, linked settings and configs, replies of an unknown shape, and what a
+rolled-back hook install leaves behind. Each against upstream's own code."""
 
 from __future__ import annotations
 
@@ -52,7 +54,7 @@ def saved_under_the_mount_path(brightness: int) -> None:
                              brightness=brightness),)))
 
 
-# --- Codex: a saved brightness survives the move to the serial id ---
+# --- A saved brightness survives the move to the serial id ---
 
 def test_a_display_change_moves_the_mount_path_entry_to_the_id_first(home, monkeypatch):
     saved_under_the_mount_path(32)
@@ -82,7 +84,7 @@ def test_an_entry_already_under_the_id_is_left_as_it_is(home):
     assert load_settings().brightness_for_device(DOT.id) == 200
 
 
-# --- Codex: a service that hangs does not hold the loop ---
+# --- A service that hangs does not hold the loop ---
 
 def test_a_service_that_does_not_answer_makes_the_state_unavailable_quickly(home, monkeypatch):
     release = threading.Event()

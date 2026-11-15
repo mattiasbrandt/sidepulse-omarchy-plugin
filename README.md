@@ -181,9 +181,8 @@ helper events, so the call works even while the popup is closed.
   [`20ca7fdd6645ba070af607e24587084b6f809275`](https://github.com/inteliwear/sidepulse/commit/20ca7fdd6645ba070af607e24587084b6f809275),
   the commit this plugin is tested against, installed with Python 3.10 or newer. The
   helper runs under that install's own Python, in `~/.local/share/sidepulse/venv`.
-  Tested with a SidePulse Dot on firmware 1.0.4. An older SidePulse (such as
-  6d55225, which the plugin used to be tested against) keeps its agents' state in a
-  file this version no longer reads: the popup's Problems section then names the
+  Tested with a SidePulse Dot on firmware 1.0.4. An older SidePulse, such as
+  6d55225, keeps its agents' state in a file this plugin does not read: the popup's Problems section then names the
   features that need a newer SidePulse, and `sidepulse update` updates it.
 - **`wasmtime` 49.0.0** in SidePulse's venv, for the Bar LEDs and for the device
   rows' animations. SidePulse's own installer does not add it, so install it

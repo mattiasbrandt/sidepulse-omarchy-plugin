@@ -1,9 +1,9 @@
-"""Fail closed on paths another local account can change, and never block the loop on them (#66).
+"""Fail closed on paths another local account can change, and never block the loop on them.
 
-Marketplace review round 5 and two audits found places where the helper went ahead after a check had
-failed (hooks left installed after the privacy pass refused a folder), or read a file by name with a
-plain open() that a FIFO would block. Each test runs against upstream's real code under a scratch HOME;
-a test that would hang if the guard broke is cut off by an alarm instead.
+The helper must not go ahead after a check has failed (hooks left installed after the privacy pass
+refused a folder), and must not read a file by name with a plain open() that a FIFO would block. Each
+test runs against upstream's real code under a scratch HOME; a test that would hang if the guard broke
+is cut off by an alarm instead.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ def test_a_folder_of_another_account_is_named(tmp_path, monkeypatch):
     assert "another account" in helper.trusted_folder_problem(tmp_path)
 
 
-# --- Hooks: checked before the install, taken out again when the pass after it fails (review round 5) ---
+# --- Hooks: checked before the install, taken out again when the pass after it fails ---
 
 def test_hooks_are_not_installed_into_a_state_folder_another_account_can_change(home, socket_in_folder):
     (home / "state").mkdir()
@@ -128,7 +128,7 @@ def test_hooks_are_not_installed_into_a_state_folder_another_account_can_change(
 
 def test_hooks_are_removed_again_when_the_check_after_the_install_fails(home, socket_in_folder, monkeypatch):
     # The installer itself leaves something unsafe (here: the claude log it names comes out as another
-    # account's): the hooks must not stay active writing there (marketplace review round 5).
+    # account's): the hooks must not stay active writing there.
     real_check = helper.hook_install_problems
     calls = []
 

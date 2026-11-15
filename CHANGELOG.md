@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.5...v0.10.0) (2026-11-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **helper:** support SidePulse at upstream main (20ca7fd) ([#67](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/67))
+
+### Features
+
+* **helper:** support SidePulse at upstream main (20ca7fd) ([#67](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/67)) ([f971fdd](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/f971fdd7f6edfc38e8029911e6c7c0fe83bc5775))
+
+
+### Bug Fixes
+
+* **helper:** close the final audit's findings before 0.10.0 ([#71](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/71)) ([1b73d76](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/1b73d76945e0de03f52fd0da8a1884cefc4d11ae))
+* **helper:** refuse paths another account can change and never block on them ([#69](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/issues/69)) ([ca4dcbb](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/commit/ca4dcbb1ba65ed48c439055cd58fb27bd45d0c02))
+
 ## [0.9.5](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/compare/v0.9.4...v0.9.5) (2026-11-14)
 
 

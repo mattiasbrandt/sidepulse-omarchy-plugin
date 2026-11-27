@@ -3,6 +3,7 @@
 [![CI](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mattiasbrandt/sidepulse-omarchy-plugin)](https://github.com/mattiasbrandt/sidepulse-omarchy-plugin/releases/latest)
 [![License: MIT](https://img.shields.io/github/license/mattiasbrandt/sidepulse-omarchy-plugin)](LICENSE)
+[![Omarchy marketplace](https://img.shields.io/badge/Omarchy_marketplace-listed-blue)](https://plugins.omarchy.org/plugin.html?id=io.github.mattiasbrandt.sidepulse)
 
 An Omarchy bar widget for SidePulse devices and AI coding agents. It shows your
 agents' State in the bar (Working, Ask, Done or Idle), lights a SidePulse Dot or
@@ -25,6 +26,10 @@ SidePulse menu-bar app does.
 > works.
 
 ## Install
+
+This plugin is listed in the
+[Omarchy plugin marketplace](https://plugins.omarchy.org/plugin.html?id=io.github.mattiasbrandt.sidepulse).
+The steps below install it from this repository either way.
 
 1. Install SidePulse first, with its own installer. Its setup instructions are at
    [sidepulse.io](https://sidepulse.io/setup). On Linux, use the Installation
